@@ -41,6 +41,12 @@
     padding:2px 6px; border-radius:2px;
   }
   .brand h1{font-size:15px; font-weight:500; letter-spacing:0.01em;}
+  .nav-link{
+    font-family:var(--mono); font-size:11.5px; color:var(--text-dim);
+    text-decoration:none; border:1px solid var(--panel-line); border-radius:3px;
+    padding:5px 10px; margin-left:8px; transition:all 0.12s;
+  }
+  .nav-link:hover{color:var(--amber); border-color:var(--amber-dim);}
   .disclaimer{
     font-family:var(--mono); font-size:10.5px; color:var(--text-dim);
     max-width:420px; text-align:right; line-height:1.5;
@@ -98,6 +104,9 @@
     border-top:1px solid var(--panel-line); padding-top:16px; margin-top:auto;
   }
   .hint-block .k{color:var(--amber);}
+  .legend{display:flex; flex-direction:column; gap:8px;}
+  .legend-row{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-dim);}
+  .legend-swatch{width:22px; height:10px; border-radius:2px; flex-shrink:0; display:inline-block;}
 
   main{flex:1; position:relative; min-width:0;}
   #canvas-wrap{width:100%; height:100%; position:relative;}
@@ -121,9 +130,10 @@
   <div class="brand">
     <span class="mark">3D</span>
     <h1>Volumetric Reconstruction — De-identified</h1>
+    <a href="gallery.html" class="nav-link">View original slices →</a>
   </div>
   <div class="disclaimer">
-    Mesh generated directly from CT voxel data (marching cubes, bone ≥250 HU / skin ≥ -300 HU).<br>
+    Mesh generated directly from CT voxel data (marching cubes, bone ≥250 HU / skin ≥ -300 HU), colored by local tissue density.<br>
     For informational discussion only — not a diagnostic tool.
   </div>
 </header>
@@ -136,6 +146,7 @@
         <div class="layer-btn active" id="btn-bone"><span><span class="swatch" style="background:#e8e2d4"></span>Bone</span></div>
         <div class="layer-btn" id="btn-skin"><span><span class="swatch" style="background:#c98a6b"></span>Skin surface</span></div>
         <div class="layer-btn" id="btn-both"><span><span class="swatch" style="background:#8899aa"></span>Both</span></div>
+        <div class="layer-btn" id="btn-complete"><span><span class="swatch" style="background:#9fd4b8"></span>Complete (gaps closed)</span></div>
       </div>
     </div>
 
@@ -159,11 +170,19 @@
     </div>
 
     <div class="control-group">
-      <label>Axis</label>
+      <label>Axis <span style="color:var(--text-dim); text-transform:none; letter-spacing:0;">(auto-enables clip)</span></label>
       <div class="layer-btns" id="axisBtns">
         <div class="layer-btn active" data-axis="x">Sagittal (X)</div>
         <div class="layer-btn" data-axis="y">Axial (Y)</div>
         <div class="layer-btn" data-axis="z">Coronal (Z)</div>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label>Colored by density</label>
+      <div class="legend">
+        <div class="legend-row"><span class="legend-swatch" style="background:linear-gradient(90deg,#e6d796,#faf5e8)"></span>low → high density bone</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:#5ad2ff"></span>metal hardware</div>
       </div>
     </div>
 
@@ -230,18 +249,22 @@ controls.minDistance = 50;
 controls.maxDistance = 1200;
 
 // Lighting — soft key + fill + rim for a clinical but dimensional look
-const key = new THREE.DirectionalLight(0xfff2e0, 1.6);
+const key = new THREE.DirectionalLight(0xfff2e0, 1.5);
 key.position.set(120, 180, 220);
 scene.add(key);
-const fill = new THREE.DirectionalLight(0x8fb8ff, 0.5);
+const fill = new THREE.DirectionalLight(0xaecbff, 0.7);
 fill.position.set(-150, -60, 120);
 scene.add(fill);
-const rim = new THREE.DirectionalLight(0xffb454, 0.35);
+const rim = new THREE.DirectionalLight(0xffb454, 0.4);
 rim.position.set(0, -200, -200);
 scene.add(rim);
-scene.add(new THREE.AmbientLight(0x404040, 0.9));
+const topFill = new THREE.DirectionalLight(0xffffff, 0.5);
+topFill.position.set(0, 300, 0);
+scene.add(topFill);
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-let boneMesh = null, skinMesh = null;
+let boneMesh = null, skinMesh = null, boneCompleteMesh = null, skinCompleteMesh = null;
 let modelCenter = new THREE.Vector3();
 const clipPlane = new THREE.Plane(new THREE.Vector3(-1,0,0), 0);
 
@@ -266,7 +289,7 @@ const loader = new GLTFLoader();
 let loadedCount = 0;
 function checkLoaded(){
   loadedCount++;
-  if(loadedCount >= 2){
+  if(loadedCount >= 4){
     document.getElementById('loading').style.display = 'none';
   }
 }
@@ -295,7 +318,7 @@ try {
   loader.parse(boneBuf, '', gltf => {
     boneMesh = findFirstMesh(gltf.scene);
     boneMesh.material = new THREE.MeshStandardMaterial({
-      color: 0xe8e2d4, roughness:0.55, metalness:0.05,
+      vertexColors: true, roughness:0.65, metalness:0.0,
       clippingPlanes:[clipPlane], side: THREE.DoubleSide
     });
     scene.add(gltf.scene);
@@ -307,7 +330,7 @@ try {
   loader.parse(skinBuf, '', gltf => {
     skinMesh = findFirstMesh(gltf.scene);
     skinMesh.material = new THREE.MeshStandardMaterial({
-      color: 0xc98a6b, roughness:0.8, metalness:0.0,
+      vertexColors: true, roughness:0.8, metalness:0.0,
       transparent:true, opacity:0.35,
       clippingPlanes:[clipPlane], side: THREE.DoubleSide
     });
@@ -317,6 +340,35 @@ try {
     skinMesh.userData.group = gltf.scene;
     checkLoaded();
   }, err => showError('skin mesh — ' + err.message));
+
+  const boneCBuf = b64ToArrayBuffer(BONE_COMPLETE_GLB_B64);
+  loader.parse(boneCBuf, '', gltf => {
+    boneCompleteMesh = findFirstMesh(gltf.scene);
+    boneCompleteMesh.material = new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness:0.65, metalness:0.0,
+      clippingPlanes:[clipPlane], side: THREE.DoubleSide
+    });
+    gltf.scene.position.sub(modelCenter);
+    gltf.scene.visible = false;
+    scene.add(gltf.scene);
+    boneCompleteMesh.userData.group = gltf.scene;
+    checkLoaded();
+  }, err => showError('repaired bone mesh — ' + err.message));
+
+  const skinCBuf = b64ToArrayBuffer(SKIN_COMPLETE_GLB_B64);
+  loader.parse(skinCBuf, '', gltf => {
+    skinCompleteMesh = findFirstMesh(gltf.scene);
+    skinCompleteMesh.material = new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness:0.8, metalness:0.0,
+      transparent:true, opacity:0.35,
+      clippingPlanes:[clipPlane], side: THREE.DoubleSide
+    });
+    gltf.scene.position.sub(modelCenter);
+    gltf.scene.visible = false;
+    scene.add(gltf.scene);
+    skinCompleteMesh.userData.group = gltf.scene;
+    checkLoaded();
+  }, err => showError('repaired skin mesh — ' + err.message));
 } catch(e) {
   showError(e.message);
 }
@@ -325,32 +377,45 @@ try {
 const btnBone = document.getElementById('btn-bone');
 const btnSkin = document.getElementById('btn-skin');
 const btnBoth = document.getElementById('btn-both');
+const btnComplete = document.getElementById('btn-complete');
 const opacityGroup = document.getElementById('opacity-group');
 
 function setMode(mode){
-  [btnBone, btnSkin, btnBoth].forEach(b=>b.classList.remove('active'));
+  [btnBone, btnSkin, btnBoth, btnComplete].forEach(b=>b.classList.remove('active'));
   if(!boneMesh) return;
   const boneGroup = boneMesh.parent;
+  const skinGroup = skinMesh ? skinMesh.userData.group : null;
+  const boneCGroup = boneCompleteMesh ? boneCompleteMesh.userData.group : null;
+  const skinCGroup = skinCompleteMesh ? skinCompleteMesh.userData.group : null;
+
+  boneGroup.visible = false;
+  if(skinGroup) skinGroup.visible = false;
+  if(boneCGroup) boneCGroup.visible = false;
+  if(skinCGroup) skinCGroup.visible = false;
+  opacityGroup.style.display = 'none';
+
   if(mode === 'bone'){
     btnBone.classList.add('active');
     boneGroup.visible = true;
-    if(skinMesh) skinMesh.userData.group.visible = false;
-    opacityGroup.style.display = 'none';
   } else if(mode === 'skin'){
     btnSkin.classList.add('active');
-    boneGroup.visible = false;
-    if(skinMesh){ skinMesh.userData.group.visible = true; skinMesh.material.opacity = 1.0; }
-    opacityGroup.style.display = 'none';
-  } else {
+    if(skinGroup){ skinGroup.visible = true; skinMesh.material.opacity = 1.0; }
+  } else if(mode === 'both'){
     btnBoth.classList.add('active');
     boneGroup.visible = true;
-    if(skinMesh){ skinMesh.userData.group.visible = true; skinMesh.material.opacity = document.getElementById('opacitySlider').value/100; }
+    if(skinGroup){ skinGroup.visible = true; skinMesh.material.opacity = document.getElementById('opacitySlider').value/100; }
+    opacityGroup.style.display = 'block';
+  } else if(mode === 'complete'){
+    btnComplete.classList.add('active');
+    if(boneCGroup) boneCGroup.visible = true;
+    if(skinCGroup){ skinCGroup.visible = true; skinCompleteMesh.material.opacity = document.getElementById('opacitySlider').value/100; }
     opacityGroup.style.display = 'block';
   }
 }
 btnBone.onclick = ()=> setMode('bone');
 btnSkin.onclick = ()=> setMode('skin');
 btnBoth.onclick = ()=> setMode('both');
+btnComplete.onclick = ()=> setMode('complete');
 
 document.getElementById('opacitySlider').addEventListener('input', e=>{
   document.getElementById('opacityVal').textContent = e.target.value + '%';
@@ -377,6 +442,11 @@ document.querySelectorAll('#axisBtns .layer-btn').forEach(b=>{
     document.querySelectorAll('#axisBtns .layer-btn').forEach(x=>x.classList.remove('active'));
     b.classList.add('active');
     clipAxis = b.dataset.axis;
+    if(!clipEnabled){
+      clipEnabled = true;
+      clipSwitch.classList.add('on');
+      clipSliderRow.style.display = 'flex';
+    }
     updateClip();
   };
 });
