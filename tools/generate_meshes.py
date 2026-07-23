@@ -410,6 +410,12 @@ def process_tissue(vol, level, target_faces, color_fn, offset_mm):
 
 
 def export_b64(mesh):
+    # trimesh only writes a NORMAL accessor into the GLB if vertex_normals
+    # has been accessed at least once beforehand -- without this, exported
+    # meshes have no normals at all, and MeshStandardMaterial/
+    # MeshPhysicalMaterial (which require normals for lighting) render flat
+    # black in the viewer regardless of vertex color.
+    _ = mesh.vertex_normals
     buf = io.BytesIO()
     mesh.export(buf, file_type="glb")
     return base64.b64encode(buf.getvalue()).decode("ascii")
