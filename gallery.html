@@ -333,7 +333,7 @@
       <div class="series-label" id="seriesLabel"></div>
       <div class="frame-index" id="frameIndex"></div>
       <div class="zoom-readout" id="zoomReadout">100%</div>
-      <div class="hint" id="hint"><span class="dot"></span><span id="hintText">Drag to scrub · wheel to zoom · shift-drag to pan</span></div>
+      <div class="hint" id="hint"><span class="dot"></span><span id="hintText">Wheel to scrub · drag to zoom · shift-drag to pan</span></div>
     </div>
     <div class="scrub">
       <button id="prevBtn">‹</button>
@@ -414,7 +414,7 @@ function selectSeries(key){
   document.querySelectorAll('.series-btn').forEach(b=>b.classList.toggle('active', b.dataset.key===key));
   document.getElementById('slider').max = current.count;
   document.getElementById('seriesLabel').textContent = manifestLabels[key] || current.label || key;
-  document.getElementById('hintText').textContent = current.flat ? 'Drag to rotate · wheel to zoom' : 'Drag to scrub · wheel to zoom · shift-drag to pan';
+  document.getElementById('hintText').textContent = current.flat ? 'Drag to rotate · wheel to zoom' : 'Wheel to scrub · drag to zoom · shift-drag to pan';
   document.getElementById('windowLevelGroup').style.display = current.flat ? 'none' : 'block';
 
   if(!current.flat){
@@ -471,6 +471,7 @@ async function loadFrame(){
       sourceCanvas.height = img.height;
       sourceCtx.drawImage(img, 0, 0);
       drawStage(img.width, img.height);
+      updateReadouts();
     };
     img.src = `images/${current.key}/${idx}.jpg`;
     updateReadouts();
@@ -588,13 +589,41 @@ document.getElementById('resetBtn').onclick = ()=>{
   updateReadouts();
 };
 
-// Drag: scrub by default, pan with shift held (or two-finger touch)
-let dragging = false, startX = 0, startY = 0, startFrame = 1, startPanX = 0, startPanY = 0, panMode = false;
+// Real cross-section series: wheel scrubs slices, drag zooms (anchored at
+// the drag start point), shift-drag pans.
+// Flat 3D-rotation renders: drag rotates through angle frames (unchanged --
+// that's the whole interaction for those), wheel zooms.
+let dragging = false, startX = 0, startY = 0, startFrame = 1;
+let startPanX = 0, startPanY = 0, panMode = false;
+let zoomDragStartLevel = 1, zoomAnchorScreenX = 0, zoomAnchorScreenY = 0;
+
+function beginZoomDrag(clientX, clientY){
+  const rect = stage.getBoundingClientRect();
+  zoomDragStartLevel = zoomLevel;
+  zoomAnchorScreenX = clientX - rect.left - stage.clientWidth/2;
+  zoomAnchorScreenY = clientY - rect.top - stage.clientHeight/2;
+  startPanX = panX; startPanY = panY;
+}
+function applyZoomDrag(clientX, clientY, startClientX, startClientY){
+  const dy = clientY - startClientY;
+  const factor = Math.pow(1.006, -dy);
+  const newZoom = Math.min(Math.max(zoomDragStartLevel * factor, fitZoom * 0.2), 16);
+  const ratio = newZoom / zoomDragStartLevel;
+  panX = zoomAnchorScreenX - (zoomAnchorScreenX - startPanX) * ratio;
+  panY = zoomAnchorScreenY - (zoomAnchorScreenY - startPanY) * ratio;
+  zoomLevel = newZoom;
+  redraw();
+  updateReadouts();
+}
 
 stage.addEventListener('mousedown', e=>{
   dragging = true; startX = e.clientX; startY = e.clientY; startFrame = frame;
-  startPanX = panX; startPanY = panY;
   panMode = e.shiftKey;
+  if(panMode){
+    startPanX = panX; startPanY = panY;
+  } else if(!current.flat){
+    beginZoomDrag(e.clientX, e.clientY);
+  }
   stage.classList.add('dragging');
 });
 window.addEventListener('mousemove', e=>{
@@ -603,13 +632,14 @@ window.addEventListener('mousemove', e=>{
     panX = startPanX + (e.clientX - startX);
     panY = startPanY + (e.clientY - startY);
     redraw();
-  } else {
+  } else if(current.flat){
     const dx = e.clientX - startX;
-    const sensitivity = current.flat ? 8 : 5;
-    const delta = Math.round(dx / sensitivity);
+    const delta = Math.round(dx / 8);
     frame = startFrame - delta;
     clampFrame();
     loadFrame();
+  } else {
+    applyZoomDrag(e.clientX, e.clientY, startX, startY);
   }
 });
 window.addEventListener('mouseup', ()=>{ dragging=false; stage.classList.remove('dragging'); });
@@ -617,8 +647,13 @@ window.addEventListener('mouseup', ()=>{ dragging=false; stage.classList.remove(
 stage.addEventListener('touchstart', e=>{
   dragging = true;
   startX = e.touches[0].clientX; startY = e.touches[0].clientY;
-  startFrame = frame; startPanX = panX; startPanY = panY;
+  startFrame = frame;
   panMode = e.touches.length > 1;
+  if(panMode){
+    startPanX = panX; startPanY = panY;
+  } else if(!current.flat){
+    beginZoomDrag(startX, startY);
+  }
 }, {passive:true});
 stage.addEventListener('touchmove', e=>{
   if(!dragging) return;
@@ -626,20 +661,27 @@ stage.addEventListener('touchmove', e=>{
     panX = startPanX + (e.touches[0].clientX - startX);
     panY = startPanY + (e.touches[0].clientY - startY);
     redraw();
-  } else {
+  } else if(current.flat){
     const dx = e.touches[0].clientX - startX;
-    const sensitivity = current.flat ? 8 : 5;
-    const delta = Math.round(dx / sensitivity);
+    const delta = Math.round(dx / 8);
     frame = startFrame - delta;
     clampFrame();
     loadFrame();
+  } else {
+    applyZoomDrag(e.touches[0].clientX, e.touches[0].clientY, startX, startY);
   }
 }, {passive:true});
 stage.addEventListener('touchend', ()=>{ dragging=false; });
 
-// Wheel = zoom, centered on cursor
+// Wheel: scrub slices for real series, zoom for flat rotation renders
 stage.addEventListener('wheel', e=>{
   e.preventDefault();
+  if(!current.flat){
+    frame += e.deltaY > 0 ? 1 : -1;
+    clampFrame();
+    loadFrame();
+    return;
+  }
   const rect = stage.getBoundingClientRect();
   const cx = e.clientX - rect.left - stage.clientWidth/2;
   const cy = e.clientY - rect.top - stage.clientHeight/2;
