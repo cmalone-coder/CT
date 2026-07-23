@@ -54,7 +54,7 @@
   .layout{flex:1; display:flex; min-height:0; position:relative;}
   nav{
     width:250px; flex-shrink:0; background:var(--panel);
-    border-right:1px solid var(--panel-line); overflow-y:auto;
+    border-right:1px solid var(--panel-line); overflow-y:auto; overflow-x:hidden;
     padding:20px 18px; display:flex; flex-direction:column; gap:22px;
   }
   .control-group label{
@@ -74,7 +74,7 @@
 
   .slider-row{display:flex; align-items:center; gap:10px; margin-top:4px;}
   input[type=range]{
-    flex:1; -webkit-appearance:none; height:3px;
+    flex:1; min-width:0; -webkit-appearance:none; height:3px;
     background:var(--panel-line); border-radius:2px; outline:none;
   }
   input[type=range]::-webkit-slider-thumb{
@@ -84,7 +84,7 @@
   input[type=range]::-moz-range-thumb{
     width:13px; height:13px; border-radius:50%; background:var(--amber); border:none; cursor:pointer;
   }
-  .val{font-family:var(--mono); font-size:11px; color:var(--text-dim); width:34px; text-align:right;}
+  .val{font-family:var(--mono); font-size:11px; color:var(--text-dim); width:30px; text-align:right;}
 
   .toggle-row{display:flex; align-items:center; justify-content:space-between; margin-top:2px;}
   .switch{
@@ -107,7 +107,7 @@
   .legend{display:flex; flex-direction:column; gap:8px;}
   .legend-row{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-dim);}
   .legend-swatch{width:22px; height:10px; border-radius:2px; flex-shrink:0; display:inline-block;}
-  .val-label{font-size:12px; color:var(--text); width:66px; flex-shrink:0;}
+  .val-label{font-size:12px; color:var(--text); width:56px; flex-shrink:0;}
 
   main{flex:1; position:relative; min-width:0;}
   #canvas-wrap{width:100%; height:100%; position:relative;}
@@ -212,28 +212,8 @@
       </div>
       <div class="slider-row" style="margin-top:8px;">
         <span class="val-label">Skin</span>
-        <input type="range" id="skinOpacitySlider" min="5" max="100" value="35">
-        <span class="val" id="skinOpacityVal">35%</span>
-      </div>
-    </div>
-
-    <div class="control-group">
-      <label>Cross-section</label>
-      <div class="toggle-row">
-        <span class="toggle-label">Clipping plane</span>
-        <div class="switch on" id="clipSwitch"><div class="knob"></div></div>
-      </div>
-      <div class="slider-row" id="clipSliderRow" style="display:flex; margin-top:10px;">
-        <input type="range" id="clipSlider" min="-100" max="100" value="100">
-      </div>
-    </div>
-
-    <div class="control-group">
-      <label>Axis <span style="color:var(--text-dim); text-transform:none; letter-spacing:0;">(auto-enables clip)</span></label>
-      <div class="layer-btns" id="axisBtns">
-        <div class="layer-btn active" data-axis="x">Sagittal (X)</div>
-        <div class="layer-btn" data-axis="y">Axial (Y)</div>
-        <div class="layer-btn" data-axis="z">Coronal (Z)</div>
+        <input type="range" id="skinOpacitySlider" min="5" max="100" value="70">
+        <span class="val" id="skinOpacityVal">70%</span>
       </div>
     </div>
 
@@ -241,7 +221,7 @@
       <label>Colored by density</label>
       <div class="legend">
         <div class="legend-row"><span class="legend-swatch" style="background:linear-gradient(90deg,#e6d796,#faf5e8)"></span>low → high density bone</div>
-        <div class="legend-row"><span class="legend-swatch" style="background:#5ad2ff"></span>metal hardware</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:#5ad2ff"></span>very dense (metal/heavy calcification)</div>
       </div>
     </div>
 
@@ -307,7 +287,7 @@ function boot(THREE, OrbitControls, GLTFLoader){
 
 const wrap = document.getElementById('canvas-wrap');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0a0b0c);
+scene.background = new THREE.Color(0x131516);
 
 const camera = new THREE.PerspectiveCamera(45, wrap.clientWidth/wrap.clientHeight, 0.1, 5000);
 camera.position.set(0, 0, 350);
@@ -315,11 +295,10 @@ camera.position.set(0, 0, 350);
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(wrap.clientWidth, wrap.clientHeight);
-renderer.localClippingEnabled = true;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.5;
 wrap.appendChild(renderer.domElement);
 
 
@@ -353,12 +332,15 @@ scene.add(rim);
 const topFill = new THREE.DirectionalLight(0xffffff, 0.18);
 topFill.position.set(0, 300, 0);
 scene.add(topFill);
-scene.add(new THREE.AmbientLight(0xffffff, 0.18));
+scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+// Cheap bounce-light substitute: keeps a directional shading gradient instead
+// of fully flattening the scene the way more flat ambient would.
+const hemi = new THREE.HemisphereLight(0x88949c, 0x2a1f18, 0.4);
+scene.add(hemi);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 let boneMesh = null, skinMesh = null, boneCompleteMesh = null, skinCompleteMesh = null;
 let modelCenter = new THREE.Vector3();
-const clipPlane = new THREE.Plane(new THREE.Vector3(-1,0,0), 0);
 
 function frameObject(obj){
   const box = new THREE.Box3().setFromObject(obj);
@@ -412,7 +394,7 @@ try {
     boneMesh.material = new THREE.MeshStandardMaterial({
       vertexColors: true, roughness:0.5, metalness:0.0,
       transparent:true, opacity:1.0,
-      clippingPlanes:[clipPlane], side: THREE.DoubleSide
+      side: THREE.DoubleSide
     });
     boneMesh.castShadow = true;
     boneMesh.receiveShadow = true;
@@ -426,17 +408,17 @@ try {
     key.shadow.camera.top = shadowExtent;
     key.shadow.camera.bottom = -shadowExtent;
     key.shadow.camera.updateProjectionMatrix();
-    updateClip();
     checkLoaded();
   }, err => showError('bone mesh — ' + err.message));
 
   const skinBuf = b64ToArrayBuffer(SKIN_GLB_B64);
   loader.parse(skinBuf, '', gltf => {
     skinMesh = findFirstMesh(gltf.scene);
-    skinMesh.material = new THREE.MeshStandardMaterial({
+    skinMesh.material = new THREE.MeshPhysicalMaterial({
       vertexColors: true, roughness:0.8, metalness:0.0,
-      transparent:true, opacity:0.35,
-      clippingPlanes:[clipPlane], side: THREE.DoubleSide
+      clearcoat:0.08, clearcoatRoughness:0.35,
+      transparent:true, opacity:0.7,
+      side: THREE.DoubleSide
     });
     skinMesh.castShadow = true;
     skinMesh.receiveShadow = true;
@@ -453,7 +435,7 @@ try {
     boneCompleteMesh.material = new THREE.MeshStandardMaterial({
       vertexColors: true, roughness:0.5, metalness:0.0,
       transparent:true, opacity:1.0,
-      clippingPlanes:[clipPlane], side: THREE.DoubleSide
+      side: THREE.DoubleSide
     });
     boneCompleteMesh.castShadow = true;
     boneCompleteMesh.receiveShadow = true;
@@ -467,10 +449,11 @@ try {
   const skinCBuf = b64ToArrayBuffer(SKIN_COMPLETE_GLB_B64);
   loader.parse(skinCBuf, '', gltf => {
     skinCompleteMesh = findFirstMesh(gltf.scene);
-    skinCompleteMesh.material = new THREE.MeshStandardMaterial({
+    skinCompleteMesh.material = new THREE.MeshPhysicalMaterial({
       vertexColors: true, roughness:0.8, metalness:0.0,
-      transparent:true, opacity:0.35,
-      clippingPlanes:[clipPlane], side: THREE.DoubleSide
+      clearcoat:0.08, clearcoatRoughness:0.35,
+      transparent:true, opacity:0.7,
+      side: THREE.DoubleSide
     });
     skinCompleteMesh.castShadow = true;
     skinCompleteMesh.receiveShadow = true;
@@ -539,48 +522,6 @@ btnBone.onclick = ()=> setMode('bone');
 btnSkin.onclick = ()=> setMode('skin');
 btnBoth.onclick = ()=> setMode('both');
 btnComplete.onclick = ()=> setMode('complete');
-
-// Clipping plane controls
-const clipSwitch = document.getElementById('clipSwitch');
-const clipSliderRow = document.getElementById('clipSliderRow');
-const clipSlider = document.getElementById('clipSlider');
-let clipEnabled = true;
-let clipAxis = 'x';
-
-clipSwitch.onclick = ()=>{
-  clipEnabled = !clipEnabled;
-  clipSwitch.classList.toggle('on', clipEnabled);
-  clipSliderRow.style.display = clipEnabled ? 'flex' : 'none';
-  updateClip();
-};
-clipSlider.addEventListener('input', updateClip);
-
-document.querySelectorAll('#axisBtns .layer-btn').forEach(b=>{
-  b.onclick = ()=>{
-    document.querySelectorAll('#axisBtns .layer-btn').forEach(x=>x.classList.remove('active'));
-    b.classList.add('active');
-    clipAxis = b.dataset.axis;
-    if(!clipEnabled){
-      clipEnabled = true;
-      clipSwitch.classList.add('on');
-      clipSliderRow.style.display = 'flex';
-    }
-    updateClip();
-  };
-});
-
-updateClip(); // apply the default-on, fully-open (100%) clip state at boot
-
-function updateClip(){
-  if(!clipEnabled){
-    clipPlane.constant = 100000; // effectively disables clipping
-    return;
-  }
-  const normals = { x: new THREE.Vector3(-1,0,0), y: new THREE.Vector3(0,-1,0), z: new THREE.Vector3(0,0,-1) };
-  clipPlane.normal.copy(normals[clipAxis]);
-  const t = clipSlider.value / 100; // -1..1
-  clipPlane.constant = t * (sceneScale/2);
-}
 
 // Resize handling
 window.addEventListener('resize', ()=>{
