@@ -118,11 +118,38 @@ def build_structure_mesh(hu_real, label, vol_geom, keep_code, name, isolevel,
     return decimated
 
 
+def smooth_gradient_stops(hu_stops, n=128):
+    """lerp_color does piecewise-LINEAR interpolation between stops -- with
+    only a handful of control points, the slope changes abruptly at each
+    one, and the eye is very sensitive to exactly that kind of slope
+    discontinuity (Mach banding): it perceives a bright/dark contour line
+    at the kink even though the underlying values are perfectly smooth.
+    Confirmed this isn't a real geometric ripple first (checked the raw HU
+    surface-crossing position slice-by-slice across the forehead at 5
+    different columns -- perfectly smooth, no oscillation anywhere), which
+    points at the color mapping, not the geometry.
+
+    Fix: fit a shape-preserving smooth curve (PCHIP -- won't overshoot
+    between control points the way a natural cubic spline can) through the
+    same control colors, then resample it densely. Same control points,
+    same intended look, but now the slope changes gradually across many
+    tiny segments instead of jumping at a few widely-spaced ones."""
+    from scipy.interpolate import PchipInterpolator
+    ts = np.array([s[0] for s in hu_stops], dtype=np.float64)
+    colors = np.array([s[1] for s in hu_stops], dtype=np.float64)
+    fine_t = np.linspace(ts[0], ts[-1], n)
+    fine_colors = np.stack([PchipInterpolator(ts, colors[:, c])(fine_t) for c in range(3)], axis=1)
+    return list(zip(fine_t, fine_colors))
+
+
 def color_bone_gradient(hu_values, p5, p995):
-    # Same 4-stop warm density gradient as before, but calibrated from
-    # bone-only voxels now that bone/teeth/metal are already separated by
-    # the label volume -- no teeth/metal override needed here, this mesh
-    # IS pure bone by construction.
+    # Same 4 control-point warm density gradient as before, but calibrated
+    # from bone-only voxels now that bone/teeth/metal are already separated
+    # by the label volume (no teeth/metal override needed here, this mesh
+    # IS pure bone by construction), and smoothed to avoid Mach-banding
+    # artifacts on the many low-frequency, real, continuous density
+    # gradients a skull actually has (frontal bone thickness, sinus
+    # pneumatization, etc.) -- see smooth_gradient_stops().
     hu_stops = [
         (p5,                       (0x8a, 0x4a, 0x1e)),  # dark burnt-orange, thin/porous bone
         (p5 + (p995 - p5) * 0.30,  (0xd8, 0xa5, 0x4a)),  # gold
@@ -130,7 +157,7 @@ def color_bone_gradient(hu_values, p5, p995):
         (p995,                     (0xff, 0xff, 0xff)),  # bright white, very dense cortical
     ]
     lo, hi = hu_stops[0][0], hu_stops[-1][0]
-    stops01 = [((hv - lo) / (hi - lo), c) for hv, c in hu_stops]
+    stops01 = smooth_gradient_stops([((hv - lo) / (hi - lo), c) for hv, c in hu_stops])
     t = (hu_values - lo) / (hi - lo)
     return lerp_color(t, stops01) / 255.0
 

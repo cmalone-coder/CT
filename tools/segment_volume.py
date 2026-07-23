@@ -63,7 +63,28 @@ TOOTH_SEED_MAX_MM3 = 700
 METAL_SEED_MIN_MM3 = 20
 METAL_SEED_MAX_MM3 = 800       # excludes naturally-dense bone masses (see below)
 
-BONE_MARKER_BUFFER_MM = 1.5    # unclaimed halo around every seed (see Fix 4 note below)
+# Unclaimed halo around each seed class, before bone becomes a competing
+# marker -- per-class, not one shared value. Metal's stays tight (1.5mm):
+# it already captures the confirmed plate's full extent precisely, and
+# hardware sits in bone, so there's no reason to let it claim more.
+# Teeth get a wider halo (4mm): root dentin genuinely has bone-range HU
+# (confirmed: a resin-filling hypothesis for an all-blue-classified tooth
+# was checked and ruled out -- the tooth simply had no competing tooth
+# marker beyond the enamel seed's immediate 1.5mm, so its root fell to
+# bone by default, not because anything about it was actually metal or
+# bone). A wider tooth halo won't fully solve root-vs-bone -- that's a
+# genuine density ambiguity no buffer size resolves -- but it lets teeth
+# claim more of their own structure before conceding by default.
+TOOTH_MARKER_BUFFER_MM = 4.0
+METAL_MARKER_BUFFER_MM = 1.5
+
+# Bone connected components under this physical size are dropped (relabeled
+# UNKNOWN, not forced into a class) before meshing. Confirmed by direct
+# inspection: the bone mesh has ~460 disconnected pieces, the vast majority
+# under 10 faces -- isolated noise specks where HU briefly crossed 250 in a
+# handful of voxels, not real anatomy (visible in a render as small
+# fragments floating away from the skull surface, unconnected to it).
+BONE_MIN_COMPONENT_MM3 = 15.0
 
 # A "distance from teeth" exclusion was tried and measurably wrong: the
 # confirmed real plate sits only 1.6mm from a tooth-seed centroid (it
@@ -227,15 +248,20 @@ def segment(vol):
     # voxels, mean HU ~1300 -- clearly ordinary dense bone like the petrous
     # temporal bone or zygomatic buttress, not hardware).
     #
-    # BONE_MARKER_BUFFER_MM is the resolution: bone markers start
-    # BONE_MARKER_BUFFER_MM away from every seed, not zero, not several mm.
+    # The buffer distance is the resolution: bone markers start their own
+    # class-specific distance away from each seed, not zero, not several mm.
     # The thin halo in between has no marker of any class -- it's exactly
     # the genuinely ambiguous partial-volume boundary, and watershed's own
     # elevation-ordered (physical-distance) flooding is what decides, voxel
     # by voxel, which side of that halo each point belongs to.
-    dist_from_seed = ndimage.distance_transform_edt(~seed_mask, sampling=sampling)
-    bone_seed_mask = dense_mask & ~seed_mask & (dist_from_seed > BONE_MARKER_BUFFER_MM)
-    del dist_from_seed
+    dist_from_tooth = ndimage.distance_transform_edt(~tooth_seed_mask, sampling=sampling)
+    dist_from_metal = ndimage.distance_transform_edt(~metal_seed_mask, sampling=sampling)
+    bone_seed_mask = (
+        dense_mask & ~seed_mask
+        & (dist_from_tooth > TOOTH_MARKER_BUFFER_MM)
+        & (dist_from_metal > METAL_MARKER_BUFFER_MM)
+    )
+    del dist_from_tooth, dist_from_metal
     gc.collect()
 
     # Every tooth-seed voxel shares marker value 1, every metal-seed voxel
@@ -271,6 +297,24 @@ def segment(vol):
     metal_mask = ws == 2
     del ws
     bone_mask = dense_mask & ~tooth_mask & ~metal_mask
+
+    # Drop bone connected components under BONE_MIN_COMPONENT_MM3 -- isolated
+    # noise specks (HU briefly crossing 250 in a handful of voxels), not real
+    # anatomy. Relabeled UNKNOWN, not silently kept as bone or forced into
+    # another class: explicit "we don't have confidence this is real" beats
+    # a wrong label, same principle as everywhere else in this pipeline.
+    bone_labeled, n_bone_comp = ndimage.label(bone_mask)
+    if n_bone_comp > 0:
+        comp_sizes_vox = ndimage.sum(bone_mask, bone_labeled, range(1, n_bone_comp + 1))
+        comp_sizes_mm3 = comp_sizes_vox * voxel_vol
+        small_ids = [i + 1 for i, v in enumerate(comp_sizes_mm3) if v < BONE_MIN_COMPONENT_MM3]
+        if small_ids:
+            dropped_mask = np.isin(bone_labeled, small_ids)
+            n_dropped_voxels = int(dropped_mask.sum())
+            bone_mask = bone_mask & ~dropped_mask
+            print(f"  dropped {len(small_ids)} bone fragments < {BONE_MIN_COMPONENT_MM3}mm^3 "
+                  f"({n_dropped_voxels} voxels, {n_dropped_voxels*voxel_vol:.1f}mm^3 total) -> UNKNOWN")
+        del bone_labeled
 
     label[bone_mask] = LABEL_BONE
     label[tooth_mask] = LABEL_TOOTH
