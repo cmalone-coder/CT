@@ -17,6 +17,7 @@ volume's geometry metadata -- everything Phase 2 (validation) and Phase 3
 (meshing) need, so nothing has to be recomputed or re-guessed downstream.
 """
 import argparse
+import gc
 import sys
 from collections import defaultdict
 
@@ -131,7 +132,17 @@ def component_centroid_mm(bbox, vol):
 def segment(vol):
     hu = vol["hu"]
     voxel_vol = voxel_volume_mm3(vol)
+    sampling = (vol["slice_thickness"], vol["row_spacing"], vol["col_spacing"])
     print(f"  voxel volume: {voxel_vol:.4f} mm^3 (shape {hu.shape})")
+
+    # At full supersampled resolution (~155M voxels) this pipeline is
+    # memory-bound, not compute-bound: a single float64 distance-transform
+    # buffer is ~1.24GB, and this ran out of memory (OOM-killed at ~16GB
+    # RSS) the first time multiple such buffers, plus multiple int32
+    # component-label volumes, were all kept alive at once. Every large
+    # transient array below is deleted (and gc.collect()'d) as soon as its
+    # last use is over, and only one big float64 distance buffer is ever
+    # alive at a time -- recomputing one cheaply beats holding several.
 
     label = np.full(hu.shape, LABEL_UNKNOWN, dtype=np.uint8)
     confidence = np.zeros(hu.shape, dtype=np.uint8)
@@ -140,10 +151,12 @@ def segment(vol):
     air_mask = hu < AIR_HU_CEILING
     label[air_mask] = LABEL_AIR
     confidence[air_mask] = 95
+    del air_mask
 
     soft_mask = (hu >= AIR_HU_CEILING) & (hu < BONE_HU_FLOOR)
     label[soft_mask] = LABEL_SOFT_TISSUE
     confidence[soft_mask] = 85  # lower than air: soft tissue is a broader, less distinct band
+    del soft_mask
 
     dense_mask = hu >= BONE_HU_FLOOR
     print(f"  dense mask (candidates for bone/tooth/metal): {int(dense_mask.sum())} voxels")
@@ -166,20 +179,29 @@ def segment(vol):
           f"(of {len(metal_ids_size_ok)} size-plausible, {metal_labeled_raw.max()} raw components at this floor) "
           f"after requiring peak density >= {METAL_PEAK_HU_MIN} HU")
 
+    # tooth_labeled/metal_labeled_raw (int32, ~620MB each at full res) are
+    # only needed to build the boolean seed masks -- every tooth-seed voxel
+    # ends up the same class regardless of which specific tooth component it
+    # came from, and likewise for metal, so nothing downstream needs the
+    # per-component id once these masks exist.
+    tooth_seed_mask = np.isin(tooth_labeled, tooth_ids) if tooth_ids else np.zeros(hu.shape, dtype=bool)
+    del tooth_labeled
+    metal_seed_mask = np.isin(metal_labeled_raw, metal_ids) if metal_ids else np.zeros(hu.shape, dtype=bool)
+    del metal_labeled_raw
+    gc.collect()
+    seed_mask = tooth_seed_mask | metal_seed_mask
+
     # --- Marker-controlled watershed: grow seeds outward through the dense
-    # mask, flooding from highest density first (elevation = -HU), so
-    # watershed divide lines naturally form at local density minima between
-    # neighboring structures instead of needing a single global threshold.
+    # mask via physical-distance elevation, so watershed divide lines form
+    # by real spatial proximity between competing structures.
     #
     # Watershed with a mask claims *every* masked voxel for the nearest
     # marker -- it never leaves anything unclaimed. Without a bone marker
     # to compete, tooth/metal seeds would flood the entire dense mask
     # (confirmed: an earlier run with no bone marker produced 0.05% bone
     # and 6.5% tooth+metal, obvious nonsense). Bone needs its own marker
-    # like any other class: everywhere in the dense mask that isn't close
-    # to a tooth/metal seed becomes a bone marker, so watershed only has to
-    # resolve the genuinely ambiguous boundary zone immediately around each
-    # seed, not arbitrate the whole skull. ---
+    # like any other class.
+    #
     # Bone markers must sit close to every seed, but not touching it -- a
     # bone marker placed immediately adjacent to a seed (zero-voxel gap)
     # leaves *no* unclaimed territory anywhere for watershed to resolve
@@ -198,36 +220,25 @@ def segment(vol):
     # the genuinely ambiguous partial-volume boundary, and watershed's own
     # elevation-ordered (physical-distance) flooding is what decides, voxel
     # by voxel, which side of that halo each point belongs to.
-    tooth_seed_mask = np.isin(tooth_labeled, tooth_ids) if tooth_ids else np.zeros(hu.shape, dtype=bool)
-    metal_seed_mask = np.isin(metal_labeled_raw, metal_ids) if metal_ids else np.zeros(hu.shape, dtype=bool)
-    seed_mask = tooth_seed_mask | metal_seed_mask
-    dist_from_seed = ndimage.distance_transform_edt(
-        ~seed_mask, sampling=(vol["slice_thickness"], vol["row_spacing"], vol["col_spacing"])
-    )
+    dist_from_seed = ndimage.distance_transform_edt(~seed_mask, sampling=sampling)
     bone_seed_mask = dense_mask & ~seed_mask & (dist_from_seed > BONE_MARKER_BUFFER_MM)
+    del dist_from_seed
+    gc.collect()
 
-    markers = np.zeros(hu.shape, dtype=np.int32)
-    id_to_class = {}
-    next_marker = 1
-    for i in tooth_ids:
-        markers[tooth_labeled == i] = next_marker
-        id_to_class[next_marker] = LABEL_TOOTH
-        next_marker += 1
-    for i in metal_ids:
-        markers[metal_labeled_raw == i] = next_marker
-        id_to_class[next_marker] = LABEL_METAL
-        next_marker += 1
-    bone_marker_labeled, n_bone_markers = ndimage.label(bone_seed_mask)
-    bone_marker_ids = set()
-    for i in range(1, n_bone_markers + 1):
-        m = next_marker
-        markers[bone_marker_labeled == i] = m
-        id_to_class[m] = LABEL_BONE
-        bone_marker_ids.add(m)
-        next_marker += 1
+    # Every tooth-seed voxel shares marker value 1, every metal-seed voxel
+    # shares marker value 2, every bone-marker voxel shares marker value 3
+    # -- watershed treats same-valued disjoint regions as contributing to
+    # one output class, which is exactly the granularity this pipeline
+    # needs (class, not individual tooth/bone-fragment identity). This also
+    # avoids ever materializing a per-component marker id volume.
+    markers = np.zeros(hu.shape, dtype=np.int8)
+    markers[tooth_seed_mask] = 1
+    markers[metal_seed_mask] = 2
+    markers[bone_seed_mask] = 3
 
-    print(f"  watershed: growing {len(tooth_ids)} tooth + {len(metal_ids)} metal + "
-          f"{n_bone_markers} bone markers through the dense mask ...")
+    print(f"  watershed: growing {int(tooth_seed_mask.sum())} tooth-seed / "
+          f"{int(metal_seed_mask.sum())} metal-seed / {int(bone_seed_mask.sum())} bone-marker voxels "
+          f"through {int(dense_mask.sum())} dense voxels ...")
     # Elevation = distance to the nearest marker of ANY class, using real
     # physical spacing (not raw voxel counts, which would be wrong on the
     # anisotropic pre-supersampling grid). This gives each ambiguous voxel
@@ -238,14 +249,14 @@ def segment(vol):
     # earlier bug (a bone marker's own density is often close enough to a
     # seed's that it wins the flood race almost immediately regardless of
     # true anatomical proximity, effectively preventing real growth).
-    distance = ndimage.distance_transform_edt(
-        markers == 0,
-        sampling=(vol["slice_thickness"], vol["row_spacing"], vol["col_spacing"]),
-    )
+    distance = ndimage.distance_transform_edt(markers == 0, sampling=sampling)
     ws = watershed(distance, markers=markers, mask=dense_mask)
+    del distance, markers
+    gc.collect()
 
-    tooth_mask = np.isin(ws, [m for m, c in id_to_class.items() if c == LABEL_TOOTH])
-    metal_mask = np.isin(ws, [m for m, c in id_to_class.items() if c == LABEL_METAL])
+    tooth_mask = ws == 1
+    metal_mask = ws == 2
+    del ws
     bone_mask = dense_mask & ~tooth_mask & ~metal_mask
 
     label[bone_mask] = LABEL_BONE
@@ -262,35 +273,33 @@ def segment(vol):
     # A voxel grown right up against the seed is nearly as sure as the seed
     # itself; a voxel near the watershed divide line, equidistant between
     # competing seeds, is genuinely the most uncertain point in the volume.
-    for i in tooth_ids:
-        confidence[tooth_labeled == i] = 97
-    for i in metal_ids:
-        confidence[metal_labeled_raw == i] = 97
+    confidence[tooth_seed_mask] = 97
+    confidence[metal_seed_mask] = 97
 
     grown_nonbone = (tooth_mask | metal_mask) & (confidence == 0)
     if grown_nonbone.any():
-        dist_to_bone_marker = ndimage.distance_transform_edt(
-            ~bone_seed_mask, sampling=(vol["slice_thickness"], vol["row_spacing"], vol["col_spacing"])
-        )
-        # own-seed distance (dist_from_seed, computed above for the bone-
-        # marker buffer) vs. bone-marker distance at each grown voxel --
+        dist_from_seed = ndimage.distance_transform_edt(~seed_mask, sampling=sampling)
+        dist_to_bone_marker = ndimage.distance_transform_edt(~bone_seed_mask, sampling=sampling)
+        # own-seed distance vs. bone-marker distance at each grown voxel --
         # close to 0 (near the seed, far from any bone) = confident;
         # close to 1 (near the watershed divide) = uncertain.
         contest = dist_from_seed[grown_nonbone] / np.maximum(
             dist_from_seed[grown_nonbone] + dist_to_bone_marker[grown_nonbone], 1e-6
         )
         confidence[grown_nonbone] = np.clip(96 - 55 * contest, 40, 96).astype(np.uint8)
+        del dist_from_seed, dist_to_bone_marker
+        gc.collect()
 
     plain_bone = bone_mask & (confidence == 0)
     # Bone confidence decays near a tooth/metal boundary -- genuine
     # partial-volume ambiguity, not a flat number everywhere.
     non_bone_dense = tooth_mask | metal_mask
     if non_bone_dense.any():
-        dist_to_nonbone = ndimage.distance_transform_edt(
-            ~non_bone_dense, sampling=(vol["slice_thickness"], vol["row_spacing"], vol["col_spacing"])
-        )
+        dist_to_nonbone = ndimage.distance_transform_edt(~non_bone_dense, sampling=sampling)
         bone_conf = np.clip(70 + 6 * dist_to_nonbone, 70, 95)
         confidence[plain_bone] = bone_conf[plain_bone].astype(np.uint8)
+        del dist_to_nonbone, bone_conf
+        gc.collect()
     else:
         confidence[plain_bone] = 90
 
@@ -338,6 +347,7 @@ def main():
     if args.supersample:
         print("Supersampling volume for isotropic resolution ...")
         vol = supersample_volume(vol)
+        gc.collect()  # release the pre-supersample array before the memory-heavy segmentation step
 
     print("Segmenting ...")
     label, confidence, debug_stats = segment(vol)
