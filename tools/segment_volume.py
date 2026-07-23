@@ -73,14 +73,25 @@ BONE_MARKER_BUFFER_MM = 1.5    # unclaimed halo around every seed (see Fix 4 not
 # territory) that happened to be far from teeth. Proximity to teeth says
 # nothing reliable about whether something is metal.
 #
-# What actually separates them in this data: peak density. The confirmed
-# plate hits 6825 HU; a set of small naturally-dense bone spots checked
-# during testing topped out at 1846-2208 HU and no higher, well short of
-# metal. Requiring a real density peak (not just clearing the seed floor
-# on average) plus a plausible physical size for a plate/screw (not
-# thousands of mm^3 of fused bone) reliably separates real hardware from
-# ordinary dense bone in this scan.
-METAL_PEAK_HU_MIN = 3000
+# A single peak-voxel ("max_hu") floor was *also* tried and *also* wrong,
+# for a different reason: natural tooth enamel in this scan legitimately
+# spikes past 3000 HU at isolated hot-spot voxels (confirmed by direct
+# visual inspection -- three "metal" seed candidates that cleared a
+# max_hu>=3000 floor turned out, on inspection of the actual CT slice
+# through each one, to be ordinary teeth: a visible pulp cavity inside a
+# dense crown, and rows of teeth along the dental arch, not hardware). One
+# hot voxel doesn't make an object metal.
+#
+# What actually separates them: how much of the object is that dense, not
+# just its single densest voxel. The confirmed plate is extremely dense
+# through most of its volume (90th-percentile HU 4822); the false-positive
+# teeth were dense at only a handful of voxels (90th-percentile HU
+# 2443-2980 -- nowhere close, despite max_hu individually reaching into the
+# 3000s for each). Checked against every one of the 15 physically-plausible
+# candidates in this scan, not just the four that passed the old max_hu
+# filter: exactly one clears a 3500 HU p90 floor, and it's the confirmed
+# plate, by a wide margin (4822 vs. the runner-up's 2980).
+METAL_DENSE_P90_HU_MIN = 3500
 
 
 def voxel_volume_mm3(vol):
@@ -111,6 +122,7 @@ def find_seed_components(hu, seed_hu, voxel_vol_mm3, min_mm3, max_mm3=None):
             "voxels": int(sizes[i - 1]),
             "volume_mm3": float(vol_mm3),
             "max_hu": float(component_hu.max()),
+            "p90_hu": float(np.percentile(component_hu, 90)),
             "mean_hu": float(component_hu.mean()),
             "bbox": tuple((s.start, s.stop) for s in sl),
         }
@@ -170,14 +182,15 @@ def segment(vol):
           f"(of {tooth_labeled.max()} raw components at this threshold)")
 
     print(f"  finding metal seeds (HU>={METAL_SEED_HU}, {METAL_SEED_MIN_MM3}-{METAL_SEED_MAX_MM3} mm^3, "
-          f"peak>={METAL_PEAK_HU_MIN}) ...")
+          f"p90>={METAL_DENSE_P90_HU_MIN}) ...")
     metal_labeled_raw, metal_ids_size_ok, metal_stats_raw = find_seed_components(
         hu, METAL_SEED_HU, voxel_vol, METAL_SEED_MIN_MM3, METAL_SEED_MAX_MM3
     )
-    metal_ids = [i for i in metal_ids_size_ok if metal_stats_raw[i]["max_hu"] >= METAL_PEAK_HU_MIN]
+    metal_ids = [i for i in metal_ids_size_ok if metal_stats_raw[i]["p90_hu"] >= METAL_DENSE_P90_HU_MIN]
     print(f"    {len(metal_ids)} metal-seed candidates kept "
           f"(of {len(metal_ids_size_ok)} size-plausible, {metal_labeled_raw.max()} raw components at this floor) "
-          f"after requiring peak density >= {METAL_PEAK_HU_MIN} HU")
+          f"after requiring 90th-percentile density >= {METAL_DENSE_P90_HU_MIN} HU "
+          f"(not just a single hot voxel)")
 
     # tooth_labeled/metal_labeled_raw (int32, ~620MB each at full res) are
     # only needed to build the boolean seed masks -- every tooth-seed voxel
