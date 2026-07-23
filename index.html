@@ -197,7 +197,7 @@
     <a href="gallery.html" class="nav-link">View original slices →</a>
   </div>
   <div class="disclaimer">
-    Bone, teeth, metal hardware, and soft tissue are independently segmented from the raw CT volume (density + connected-component + watershed classification, not one mesh colored after the fact), each rendered as its own mesh.<br>
+    Direct volume rendering (GPU raymarching) of the segmented CT volume — no surface mesh is extracted, so there's no decimation, no marching-cubes faceting, and no mesh debris to introduce artifacts. Bone/teeth/metal/soft-tissue classification comes from the same segmentation pipeline as before (density + connected components + watershed).<br>
     For informational discussion only — not a diagnostic tool.
   </div>
 </header>
@@ -265,7 +265,7 @@
           <span class="legend-swatch" style="background:#298bff"></span>metal hardware (separately segmented)
         </div>
         <div class="legend-note">
-          Every voxel in the CT volume was classified into bone / tooth / metal / soft tissue / air by a segmentation pipeline (density thresholds, real 3D connected components, and marker-controlled watershed to separate touching structures) before any mesh was built. Each structure here is its own independent mesh extracted only from its own labeled voxels — not one mesh colored by a density cutoff after the fact. The bone gradient above is calibrated from bone-only voxels; teeth and metal are flat, deliberately unmistakable colors rather than a continuation of that gradient.
+          Every voxel in the CT volume was classified into bone / tooth / metal / soft tissue / air by a segmentation pipeline (density thresholds, real 3D connected components, and marker-controlled watershed to separate touching structures). The renderer marches a ray through the actual voxel grid for every pixel and colors each sample by its classification and density — the bone gradient is calibrated from bone-only voxels; teeth and metal are flat, deliberately unmistakable colors.
         </div>
       </div>
     </div>
@@ -331,12 +331,11 @@
 
   <main>
     <div id="canvas-wrap">
-      <div id="loading"><div class="spinner"></div><div class="msg">LOADING MESH DATA…</div></div>
+      <div id="loading"><div class="spinner"></div><div class="msg">LOADING VOLUME DATA…</div></div>
     </div>
   </main>
 </div>
 
-<script src="data.js"></script>
 <script type="importmap">
 {
   "imports": {
@@ -360,9 +359,8 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-function boot(THREE, OrbitControls, GLTFLoader){
+async function boot(THREE, OrbitControls){
 
 const wrap = document.getElementById('canvas-wrap');
 const scene = new THREE.Scene();
@@ -372,115 +370,16 @@ const camera = new THREE.PerspectiveCamera(45, wrap.clientWidth/wrap.clientHeigh
 camera.position.set(0, 0, 350);
 
 const renderer = new THREE.WebGLRenderer({ antialias:true });
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(wrap.clientWidth, wrap.clientHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.5;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 wrap.appendChild(renderer.domElement);
-
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-controls.minDistance = 50;
+controls.minDistance = 20;
 controls.maxDistance = 1200;
-
-// Lighting — dominant directional key for real shadow definition; fill/rim/ambient
-// kept low so they don't flatten the density color-coding on the mesh.
-const key = new THREE.DirectionalLight(0xfff2e0, 3.0);
-key.position.set(120, 180, 220);
-key.castShadow = true;
-key.shadow.mapSize.set(2048, 2048);
-key.shadow.camera.left = -160;
-key.shadow.camera.right = 160;
-key.shadow.camera.top = 160;
-key.shadow.camera.bottom = -160;
-key.shadow.camera.near = 20;
-key.shadow.camera.far = 700;
-key.shadow.bias = -0.0015;
-key.shadow.radius = 1.4;
-scene.add(key);
-const fill = new THREE.DirectionalLight(0xaecbff, 0.25);
-fill.position.set(-150, -60, 120);
-scene.add(fill);
-const rim = new THREE.DirectionalLight(0xffb454, 0.3);
-rim.position.set(0, -200, -200);
-scene.add(rim);
-const topFill = new THREE.DirectionalLight(0xffffff, 0.18);
-topFill.position.set(0, 300, 0);
-scene.add(topFill);
-scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-// Cheap bounce-light substitute: keeps a directional shading gradient instead
-// of fully flattening the scene the way more flat ambient would.
-const hemi = new THREE.HemisphereLight(0x88949c, 0x2a1f18, 0.4);
-scene.add(hemi);
-// Headlight: follows the camera so whatever side you're currently looking at
-// always has some real illumination, instead of going dark when it's turned
-// away from the fixed key light. The key/fill/rim/hemi lights above stay
-// genuinely fixed in the scene (they're the ones giving real shadow
-// definition) -- this is a deliberate supplement, not a replacement.
-const headlight = new THREE.DirectionalLight(0xffffff, 0.5);
-headlight.target.position.set(0, 0, 0);
-scene.add(headlight);
-scene.add(headlight.target);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-
-const STRUCTURES = ['bone', 'tooth', 'metal', 'soft_tissue'];
-const structureMesh = {};   // name -> THREE.Mesh
-const structureGroup = {};  // name -> THREE.Group (positioned/visibility toggled)
-let modelCenter = new THREE.Vector3();
-
-function frameObject(obj){
-  const box = new THREE.Box3().setFromObject(obj);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-  modelCenter.copy(center);
-  obj.position.sub(center); // center mesh at origin
-  const maxDim = Math.max(size.x, size.y, size.z);
-  camera.position.set(0, 0, maxDim * 1.6);
-  controls.target.set(0,0,0);
-  camera.near = maxDim/100; camera.far = maxDim*10;
-  camera.updateProjectionMatrix();
-  controls.update();
-  return maxDim;
-}
-
-let sceneScale = 200;
-
-const loader = new GLTFLoader();
-let loadedCount = 0;
-function checkLoaded(){
-  loadedCount++;
-  if(loadedCount >= STRUCTURES.length){
-    // Structures load asynchronously and are not guaranteed to resolve in
-    // STRUCTURES order, but every non-bone group must be centered using
-    // modelCenter, which only becomes correct once bone's own frameObject()
-    // has run -- so centering the *other* groups is deferred to here,
-    // after every load has settled, rather than done eagerly per-callback.
-    STRUCTURES.forEach(name => {
-      if(name === 'bone') return;
-      const group = structureGroup[name];
-      if(group) group.position.sub(modelCenter);
-    });
-    document.getElementById('loading').style.display = 'none';
-    applyClippingToMaterials(); // in case clipping was toggled on before every structure finished loading
-  }
-}
-
-function findFirstMesh(root){
-  let found = null;
-  root.traverse(obj => { if(!found && obj.isMesh) found = obj; });
-  return found;
-}
-
-function b64ToArrayBuffer(b64){
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for(let i=0; i<binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
 
 function showError(msg){
   const el = document.getElementById('loading');
@@ -488,81 +387,304 @@ function showError(msg){
   el.querySelector('.spinner').style.display = 'none';
 }
 
-// Each structure is its own independent mesh, extracted only from its own
-// labeled voxels (see tools/generate_segmented_meshes.py) -- material
-// choice per structure reflects what it actually is now that they're no
-// longer sharing one mesh: metal gets a real metallic material instead of
-// just a vertex color, since it's isolated hardware, not a color tier
-// painted onto bone.
-const STRUCTURE_CONFIG = {
-  bone:        { b64: () => BONE_GLB_B64,        defaultOn: true,  defaultOpacity: 1.00,
-                 material: () => new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.5, metalness:0.0, transparent:true, side:THREE.DoubleSide }) },
-  tooth:       { b64: () => TOOTH_GLB_B64,        defaultOn: true,  defaultOpacity: 1.00,
-                 material: () => new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.3, metalness:0.0, transparent:true, side:THREE.DoubleSide }) },
-  metal:       { b64: () => METAL_GLB_B64,        defaultOn: true,  defaultOpacity: 1.00,
-                 material: () => new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.3, metalness:0.7, transparent:true, side:THREE.DoubleSide }) },
-  soft_tissue: { b64: () => SOFT_TISSUE_GLB_B64,  defaultOn: false, defaultOpacity: 0.65,
-                 material: () => new THREE.MeshPhysicalMaterial({ vertexColors:true, roughness:0.8, metalness:0.0, clearcoat:0.08, clearcoatRoughness:0.35, transparent:true, side:THREE.DoubleSide }) },
-};
-
-try {
-  STRUCTURES.forEach(name => {
-    const cfg = STRUCTURE_CONFIG[name];
-    const b64 = cfg.b64();
-    if(!b64){ checkLoaded(); return; } // this structure had no voxels in this scan
-    const buf = b64ToArrayBuffer(b64);
-    loader.parse(buf, '', gltf => {
-      const mesh = findFirstMesh(gltf.scene);
-      mesh.material = cfg.material();
-      mesh.material.opacity = cfg.defaultOpacity;
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      structureMesh[name] = mesh;
-      structureGroup[name] = gltf.scene;
-
-      if(name === 'bone'){
-        // Bone anchors the scene framing/centering -- every other
-        // structure's group is repositioned by the same modelCenter so
-        // they stay spatially aligned once bone has defined it.
-        scene.add(gltf.scene);
-        sceneScale = frameObject(gltf.scene);
-        const shadowExtent = sceneScale * 0.75;
-        key.shadow.camera.left = -shadowExtent;
-        key.shadow.camera.right = shadowExtent;
-        key.shadow.camera.top = shadowExtent;
-        key.shadow.camera.bottom = -shadowExtent;
-        key.shadow.camera.updateProjectionMatrix();
-      } else {
-        // Centering for non-bone groups happens once in checkLoaded(),
-        // after every structure has loaded -- see the comment there.
-        scene.add(gltf.scene);
-      }
-      gltf.scene.visible = cfg.defaultOn;
-      checkLoaded();
-    }, err => showError(name + ' mesh — ' + err.message));
-  });
-} catch(e) {
-  showError(e.message);
+// ---------------------------------------------------------------------
+// Load + decompress the volume. Two channels (see
+// tools/export_volume_texture.py): HU (windowed to 8 bits, needs linear
+// filtering so the raymarcher gets a smooth continuous field) and label
+// (the segmentation classes, needs nearest filtering -- interpolating
+// between class IDs is meaningless). gzip via the native
+// DecompressionStream API -- no bundled library needed.
+// ---------------------------------------------------------------------
+async function fetchGzip(url){
+  const res = await fetch(url);
+  if(!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
+  const ds = new DecompressionStream('gzip');
+  const stream = res.body.pipeThrough(ds);
+  return new Response(stream).arrayBuffer();
 }
 
-// Per-structure toggle + opacity controls
+let meta, huData, labelData;
+try {
+  const metaRes = await fetch('volume/volume_meta.json');
+  if(!metaRes.ok) throw new Error(`volume_meta.json -> HTTP ${metaRes.status}`);
+  meta = await metaRes.json();
+  const [huBuf, labelBuf] = await Promise.all([
+    fetchGzip('volume/volume_hu.bin.gz'),
+    fetchGzip('volume/volume_label.bin.gz'),
+  ]);
+  huData = new Uint8Array(huBuf);
+  labelData = new Uint8Array(labelBuf);
+  const expected = meta.nslices * meta.nrows * meta.ncols;
+  if(huData.length !== expected || labelData.length !== expected){
+    throw new Error(`decompressed size mismatch (got ${huData.length}/${labelData.length}, expected ${expected})`);
+  }
+} catch(e) {
+  showError('volume data — ' + e.message);
+  return;
+}
+
+const { nslices, nrows, ncols, rowSpacing, colSpacing, sliceThickness } = meta;
+
+// Physical box size in mm and the box<->texture mapping. Derived directly
+// from this pipeline's established axis-aligned display convention
+// (verified, not assumed, at export time: row_cosine=(1,0,0),
+// col_cosine=(0,1,0), normal=(0,0,1) -- see export_volume_texture.py) --
+// display X = -L (left-right), Y = S (superior-inferior), Z = -P
+// (anterior-posterior). The box mesh is authored directly in this
+// project's display-space mm, centered at the scene origin, so "local"
+// and "world" coordinates coincide (no extra transform to track):
+//   u (col fraction) = 0.5 - x/sizeX
+//   v (row fraction) = 0.5 - z/sizeZ
+//   w (slice fraction) = 0.5 + y/sizeY
+const sizeX = ncols * colSpacing;
+const sizeY = nslices * sliceThickness;
+const sizeZ = nrows * rowSpacing;
+const sceneScale = Math.max(sizeX, sizeY, sizeZ);
+
+camera.position.set(0, 0, sceneScale * 1.6);
+camera.near = sceneScale / 100;
+camera.far = sceneScale * 10;
+camera.updateProjectionMatrix();
+controls.target.set(0, 0, 0);
+controls.update();
+
+const huTexture = new THREE.Data3DTexture(huData, ncols, nrows, nslices);
+huTexture.format = THREE.RedFormat;
+huTexture.type = THREE.UnsignedByteType;
+huTexture.minFilter = THREE.LinearFilter;
+huTexture.magFilter = THREE.LinearFilter;
+huTexture.wrapS = huTexture.wrapT = huTexture.wrapR = THREE.ClampToEdgeWrapping;
+huTexture.unpackAlignment = 1;
+huTexture.needsUpdate = true;
+
+const labelTexture = new THREE.Data3DTexture(labelData, ncols, nrows, nslices);
+labelTexture.format = THREE.RedFormat;
+labelTexture.type = THREE.UnsignedByteType;
+labelTexture.minFilter = THREE.NearestFilter;
+labelTexture.magFilter = THREE.NearestFilter;
+labelTexture.wrapS = labelTexture.wrapT = labelTexture.wrapR = THREE.ClampToEdgeWrapping;
+labelTexture.unpackAlignment = 1;
+labelTexture.needsUpdate = true;
+
+// HU calibration stops normalized into the [0,1] window space the 8-bit
+// texture actually stores, so the shader never needs to know the real HU
+// window bounds.
+function normHu(hu){ return (hu - meta.windowMinHu) / (meta.windowMaxHu - meta.windowMinHu); }
+
+const uniforms = {
+  uHuTex: { value: huTexture },
+  uLabelTex: { value: labelTexture },
+  uBoxSize: { value: new THREE.Vector3(sizeX, sizeY, sizeZ) },
+  uCameraLocal: { value: new THREE.Vector3() },
+  uBoneP5: { value: normHu(meta.boneP5) },
+  uBoneP995: { value: normHu(meta.boneP995) },
+  uSoftP5: { value: normHu(meta.softP5) },
+  uSoftP95: { value: normHu(meta.softP95) },
+  uBoneOpacity: { value: 1.0 },
+  uToothOpacity: { value: 1.0 },
+  uMetalOpacity: { value: 1.0 },
+  uSoftOpacity: { value: 0.65 },
+  uBoneVisible: { value: 1.0 },
+  uToothVisible: { value: 1.0 },
+  uMetalVisible: { value: 1.0 },
+  uSoftVisible: { value: 0.0 },
+  uClipEnabled: { value: 0.0 },
+  uClipPlane: { value: new THREE.Vector4(0, 1, 0, 0) },
+  uLightDir: { value: new THREE.Vector3(0, 0, 1) },
+};
+
+const vertexShader = `
+in vec3 position;
+out vec3 vLocalPos;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+void main(){
+  vLocalPos = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+// Raymarching volume renderer. Ray-box intersection via the slab method
+// (robust whether the camera is outside or inside the box -- tNear is
+// clamped to 0 for the inside case), then fixed-step front-to-back alpha
+// compositing. Opacity is gated by the *label* (exact per-voxel
+// classification from the segmentation pipeline, not a density guess),
+// so a real bone voxel stays visible even where its density is on the
+// lower end -- unlike a pure HU-windowing transfer function (what most
+// generic volume renderers, including clinical ones, actually use), this
+// doesn't lose real anatomy at the edges of its own density range. Color
+// for bone/soft-tissue comes from a smooth density gradient within that
+// structure; teeth/metal are flat, unmistakable colors, matching the
+// mesh-based viewer's design before this replaced it.
+const fragmentShader = `
+precision highp float;
+precision highp sampler3D;
+
+in vec3 vLocalPos;
+out vec4 outColor;
+
+uniform sampler3D uHuTex;
+uniform sampler3D uLabelTex;
+uniform vec3 uBoxSize;
+uniform vec3 uCameraLocal;
+uniform float uBoneP5, uBoneP995;
+uniform float uSoftP5, uSoftP95;
+uniform float uBoneOpacity, uToothOpacity, uMetalOpacity, uSoftOpacity;
+uniform float uBoneVisible, uToothVisible, uMetalVisible, uSoftVisible;
+uniform float uClipEnabled;
+uniform vec4 uClipPlane;
+uniform vec3 uLightDir;
+
+const vec3 TOOTH_COLOR = vec3(0.851, 0.812, 0.980);
+const vec3 METAL_COLOR = vec3(0.161, 0.545, 1.0);
+const int MAX_STEPS = 340;
+
+vec3 boneGradient(float hu){
+  float t = clamp((hu - uBoneP5) / max(uBoneP995 - uBoneP5, 0.0001), 0.0, 1.0);
+  vec3 c0 = vec3(0.541, 0.290, 0.118);
+  vec3 c1 = vec3(0.847, 0.647, 0.290);
+  vec3 c2 = vec3(0.941, 0.902, 0.824);
+  vec3 c3 = vec3(1.0, 1.0, 1.0);
+  if(t < 0.30) return mix(c0, c1, t / 0.30);
+  if(t < 0.65) return mix(c1, c2, (t - 0.30) / 0.35);
+  return mix(c2, c3, (t - 0.65) / 0.35);
+}
+
+vec3 skinGradient(float hu){
+  float t = clamp((hu - uSoftP5) / max(uSoftP95 - uSoftP5, 0.0001), 0.0, 1.0);
+  return mix(vec3(0.725, 0.478, 0.341), vec3(0.878, 0.675, 0.522), t);
+}
+
+vec3 localToUvw(vec3 p){
+  return vec3(
+    0.5 - p.x / uBoxSize.x,
+    0.5 - p.z / uBoxSize.z,
+    0.5 + p.y / uBoxSize.y
+  );
+}
+
+vec2 hitBox(vec3 orig, vec3 dir){
+  vec3 boxMin = -uBoxSize * 0.5;
+  vec3 boxMax = uBoxSize * 0.5;
+  vec3 invDir = 1.0 / dir;
+  vec3 t1 = (boxMin - orig) * invDir;
+  vec3 t2 = (boxMax - orig) * invDir;
+  vec3 tMin = min(t1, t2);
+  vec3 tMax = max(t1, t2);
+  return vec2(max(max(tMin.x, tMin.y), tMin.z), min(min(tMax.x, tMax.y), tMax.z));
+}
+
+void main(){
+  vec3 rayDir = normalize(vLocalPos - uCameraLocal);
+  vec2 hit = hitBox(uCameraLocal, rayDir);
+  float tNear = max(hit.x, 0.0);
+  float tFar = hit.y;
+  if(tFar <= tNear) discard;
+
+  float stepSize = (tFar - tNear) / float(MAX_STEPS);
+  vec3 stepVec = rayDir * stepSize;
+  vec3 samplePos = uCameraLocal + rayDir * tNear;
+  vec3 gradStep = vec3(0.7);
+
+  vec3 accumColor = vec3(0.0);
+  float accumAlpha = 0.0;
+
+  for(int i = 0; i < MAX_STEPS; i++){
+    if(accumAlpha > 0.98) break;
+
+    bool skip = false;
+    if(uClipEnabled > 0.5 && dot(samplePos, uClipPlane.xyz) + uClipPlane.w < 0.0) skip = true;
+
+    vec3 uvw = localToUvw(samplePos);
+    if(uvw.x < 0.0 || uvw.x > 1.0 || uvw.y < 0.0 || uvw.y > 1.0 || uvw.z < 0.0 || uvw.z > 1.0) skip = true;
+
+    if(!skip){
+      float huNorm = texture(uHuTex, uvw).r;
+      int labelId = int(texture(uLabelTex, uvw).r * 255.0 + 0.5);
+
+      float alpha = 0.0;
+      vec3 color = vec3(0.0);
+      if(labelId == 3){
+        alpha = uBoneOpacity * uBoneVisible * 0.45;
+        color = boneGradient(huNorm);
+      } else if(labelId == 4){
+        alpha = uToothOpacity * uToothVisible * 0.5;
+        color = TOOTH_COLOR;
+      } else if(labelId == 5){
+        alpha = uMetalOpacity * uMetalVisible * 0.6;
+        color = METAL_COLOR;
+      } else if(labelId == 2){
+        alpha = uSoftOpacity * uSoftVisible * 0.035;
+        color = skinGradient(huNorm);
+      }
+
+      if(alpha > 0.001){
+        float hx1 = texture(uHuTex, localToUvw(samplePos + vec3(gradStep.x, 0.0, 0.0))).r;
+        float hx2 = texture(uHuTex, localToUvw(samplePos - vec3(gradStep.x, 0.0, 0.0))).r;
+        float hy1 = texture(uHuTex, localToUvw(samplePos + vec3(0.0, gradStep.y, 0.0))).r;
+        float hy2 = texture(uHuTex, localToUvw(samplePos - vec3(0.0, gradStep.y, 0.0))).r;
+        float hz1 = texture(uHuTex, localToUvw(samplePos + vec3(0.0, 0.0, gradStep.z))).r;
+        float hz2 = texture(uHuTex, localToUvw(samplePos - vec3(0.0, 0.0, gradStep.z))).r;
+        vec3 grad = vec3(hx1 - hx2, hy1 - hy2, hz1 - hz2);
+        float gradLen = length(grad);
+        vec3 normal = gradLen > 0.0001 ? -grad / gradLen : vec3(0.0, 1.0, 0.0);
+        float diffuse = max(dot(normal, uLightDir), 0.0);
+        color *= (0.55 + 0.55 * diffuse);
+
+        accumColor += (1.0 - accumAlpha) * alpha * color;
+        accumAlpha += (1.0 - accumAlpha) * alpha;
+      }
+    }
+
+    samplePos += stepVec;
+  }
+
+  if(accumAlpha < 0.01) discard;
+  outColor = vec4(accumColor, accumAlpha);
+}
+`;
+
+const material = new THREE.RawShaderMaterial({
+  glslVersion: THREE.GLSL3,
+  uniforms,
+  vertexShader,
+  fragmentShader,
+  transparent: true,
+  premultipliedAlpha: true,
+  side: THREE.BackSide,
+  depthWrite: false,
+});
+
+const boxGeo = new THREE.BoxGeometry(sizeX, sizeY, sizeZ);
+const volumeMesh = new THREE.Mesh(boxGeo, material);
+scene.add(volumeMesh);
+
+document.getElementById('loading').style.display = 'none';
+
+// ---------------------------------------------------------------------
+// Per-structure toggle + opacity controls -- drive shader uniforms
+// directly instead of per-object material/visibility state.
+// ---------------------------------------------------------------------
+const STRUCTURES = ['bone', 'tooth', 'metal', 'soft_tissue'];
+const UNIFORM_KEY = { bone:'Bone', tooth:'Tooth', metal:'Metal', soft_tissue:'Soft' };
+const visibleState = { bone:true, tooth:true, metal:true, soft_tissue:false };
+
 STRUCTURES.forEach(name => {
   const toggle = document.getElementById('toggle-' + name);
   const slider = document.getElementById('opacity-' + name);
   const valEl = document.getElementById('opacityVal-' + name);
+  const key = UNIFORM_KEY[name];
   if(!toggle || !slider) return;
 
   toggle.onclick = () => {
-    const group = structureGroup[name];
-    if(!group) return;
-    const on = !group.visible;
-    group.visible = on;
+    const on = !visibleState[name];
+    visibleState[name] = on;
     toggle.classList.toggle('on', on);
+    uniforms['u' + key + 'Visible'].value = on ? 1.0 : 0.0;
   };
 
   slider.addEventListener('input', () => {
-    const mesh = structureMesh[name];
-    if(mesh) mesh.material.opacity = slider.value / 100;
+    uniforms['u' + key + 'Opacity'].value = slider.value / 100;
     valEl.textContent = slider.value + '%';
   });
 });
@@ -570,14 +692,52 @@ STRUCTURES.forEach(name => {
 // ---------------------------------------------------------------------
 // Click-to-identify + point-to-point / angle measurement.
 //
-// Segmentation only produces class-level labels (bone / tooth / metal /
-// soft tissue) -- there's no sub-anatomical atlas behind this, so
-// identify reports the real classified structure, not a guessed
-// anatomical name like "maxilla". Position is reported in mm relative to
-// the volume's own center (the same rigid coordinate frame the meshes
-// already share), not a clinical landmark.
+// There's no explicit surface to raycast against (that's the whole point
+// of volume rendering), so this walks the *label* array directly in JS --
+// the same array driving the shader's classification, just read from the
+// CPU side -- stepping along the click ray until it finds the first voxel
+// belonging to a currently-visible structure. Segmentation only produces
+// class-level labels, so identify reports the real classified structure,
+// not a guessed anatomical name like "maxilla".
 // ---------------------------------------------------------------------
 const STRUCTURE_LABEL = { bone:'Bone', tooth:'Tooth', metal:'Metal hardware', soft_tissue:'Soft tissue' };
+const LABEL_ID = { bone:3, tooth:4, metal:5, soft_tissue:2 };
+
+function labelAtLocal(p){
+  const u = 0.5 - p.x / sizeX;
+  const v = 0.5 - p.z / sizeZ;
+  const w = 0.5 + p.y / sizeY;
+  if(u < 0 || u > 1 || v < 0 || v > 1 || w < 0 || w > 1) return -1;
+  const col = Math.min(ncols - 1, Math.floor(u * ncols));
+  const row = Math.min(nrows - 1, Math.floor(v * nrows));
+  const slice = Math.min(nslices - 1, Math.floor(w * nslices));
+  return labelData[slice * nrows * ncols + row * ncols + col];
+}
+
+function raycastVolume(origin, dir){
+  const boxMin = new THREE.Vector3(-sizeX/2, -sizeY/2, -sizeZ/2);
+  const boxMax = new THREE.Vector3(sizeX/2, sizeY/2, sizeZ/2);
+  const invDir = new THREE.Vector3(1/dir.x, 1/dir.y, 1/dir.z);
+  const t1 = boxMin.clone().sub(origin).multiply(invDir);
+  const t2 = boxMax.clone().sub(origin).multiply(invDir);
+  const tMin = new THREE.Vector3(Math.min(t1.x,t2.x), Math.min(t1.y,t2.y), Math.min(t1.z,t2.z));
+  const tMax = new THREE.Vector3(Math.max(t1.x,t2.x), Math.max(t1.y,t2.y), Math.max(t1.z,t2.z));
+  const tNear = Math.max(0, Math.max(tMin.x, Math.max(tMin.y, tMin.z)));
+  const tFar = Math.min(tMax.x, Math.min(tMax.y, tMax.z));
+  if(tFar <= tNear) return null;
+
+  const steps = 500;
+  const stepSize = (tFar - tNear) / steps;
+  const pos = origin.clone().addScaledVector(dir, tNear);
+  const stepVec = dir.clone().multiplyScalar(stepSize);
+  for(let i = 0; i < steps; i++){
+    const lab = labelAtLocal(pos);
+    const name = STRUCTURES.find(n => LABEL_ID[n] === lab);
+    if(name && visibleState[name]) return { point: pos.clone(), structure: name };
+    pos.add(stepVec);
+  }
+  return null;
+}
 
 let toolMode = 'rotate'; // 'rotate' | 'identify' | 'distance' | 'angle'
 const modeButtons = {
@@ -602,11 +762,9 @@ function setToolMode(mode){
 }
 Object.entries(modeButtons).forEach(([k, btn]) => btn.onclick = () => setToolMode(k));
 
-// Measurement/identify visuals live in their own group so clearMarkers()
-// can wipe them without touching the anatomy meshes.
 const markerGroup = new THREE.Group();
 scene.add(markerGroup);
-let measurePoints = []; // THREE.Vector3[] in world (already-centered) space
+let measurePoints = [];
 
 function clearMarkers(){
   measurePoints = [];
@@ -638,37 +796,28 @@ function addMarkerLine(a, b){
   markerGroup.add(line);
 }
 
-const raycaster = new THREE.Raycaster();
-const pointerNDC = new THREE.Vector2();
-
-function visibleStructureMeshes(){
-  return STRUCTURES
-    .filter(n => structureGroup[n] && structureGroup[n].visible)
-    .map(n => structureMesh[n])
-    .filter(Boolean);
-}
-
 function angleAtVertex(a, b, c){
   const v1 = new THREE.Vector3().subVectors(a, b).normalize();
   const v2 = new THREE.Vector3().subVectors(c, b).normalize();
   return THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(v1.dot(v2), -1, 1)));
 }
 
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
+
 function handleToolClick(clientX, clientY){
   const rect = renderer.domElement.getBoundingClientRect();
   pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNDC, camera);
-  const hits = raycaster.intersectObjects(visibleStructureMeshes(), false);
-  if(hits.length === 0) return;
-  const hit = hits[0];
+  const hit = raycastVolume(raycaster.ray.origin, raycaster.ray.direction);
+  if(!hit) return;
 
   if(toolMode === 'identify'){
     clearMarkers();
     addMarkerSphere(hit.point);
-    const name = STRUCTURES.find(n => structureMesh[n] === hit.object);
     const p = hit.point;
-    toolResult.innerHTML = `<b style="color:var(--amber)">${STRUCTURE_LABEL[name] || 'unknown'}</b><br>`
+    toolResult.innerHTML = `<b style="color:var(--amber)">${STRUCTURE_LABEL[hit.structure]}</b><br>`
       + `position (mm from volume center): ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`;
     return;
   }
@@ -704,58 +853,41 @@ function handleToolClick(clientX, clientY){
   }
 }
 
-// Distinguish a real click from a drag-to-rotate: OrbitControls handles the
-// drag itself (this listener never calls preventDefault/stopPropagation),
-// this just checks how far the pointer moved between down and up.
 let pointerDownAt = null;
 renderer.domElement.addEventListener('pointerdown', e => { pointerDownAt = { x:e.clientX, y:e.clientY }; });
 renderer.domElement.addEventListener('pointerup', e => {
   const start = pointerDownAt;
   pointerDownAt = null;
   if(toolMode === 'rotate' || !start) return;
-  if(Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4) return; // was a drag, not a click
+  if(Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4) return;
   handleToolClick(e.clientX, e.clientY);
 });
 
 // ---------------------------------------------------------------------
-// Cross-sectional clipping -- one active plane; orientation, position,
-// and side are all adjustable. Applied per-material (three.js reads
-// material.clippingPlanes, there's no single renderer-wide list) so it
-// automatically covers every structure, including ones still loading
-// (see the applyClippingToMaterials() call added to checkLoaded() above).
+// Clipping plane -- a shader uniform now instead of per-material
+// THREE.Plane objects; the raymarch loop skips samples on the clipped
+// side. Same axis convention as the rest of this project.
 // ---------------------------------------------------------------------
-renderer.localClippingEnabled = true;
-const clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 let clipEnabled = false;
 let clipAxis = 'axial';
 let clipFlipped = false;
-
 const CLIP_AXIS_NORMAL = {
-  axial:    new THREE.Vector3(0, 1, 0),  // display Y = Superior
-  coronal:  new THREE.Vector3(0, 0, 1),  // display Z = -Posterior (anterior-facing)
-  sagittal: new THREE.Vector3(1, 0, 0),  // display X = -Left (right-facing)
+  axial:    new THREE.Vector3(0, 1, 0),
+  coronal:  new THREE.Vector3(0, 0, 1),
+  sagittal: new THREE.Vector3(1, 0, 0),
 };
-
-function applyClippingToMaterials(){
-  const planes = clipEnabled ? [clipPlane] : [];
-  STRUCTURES.forEach(name => {
-    const mesh = structureMesh[name];
-    if(mesh) mesh.material.clippingPlanes = planes;
-  });
-}
 
 function updateClipPlane(){
   const normal = CLIP_AXIS_NORMAL[clipAxis].clone();
   if(clipFlipped) normal.negate();
-  const posFrac = document.getElementById('clipSlider').value / 100; // -1..1
-  clipPlane.normal.copy(normal);
-  clipPlane.constant = -posFrac * (sceneScale * 0.6); // slider spans +-60% of model scale, centered at origin
+  const posFrac = document.getElementById('clipSlider').value / 100;
+  const constant = -posFrac * (sceneScale * 0.6);
+  uniforms.uClipPlane.value.set(normal.x, normal.y, normal.z, constant);
 }
-
 document.getElementById('clipToggle').onclick = function(){
   clipEnabled = !clipEnabled;
   this.classList.toggle('on', clipEnabled);
-  applyClippingToMaterials();
+  uniforms.uClipEnabled.value = clipEnabled ? 1.0 : 0.0;
 };
 document.getElementById('clipFlip').onclick = function(){
   clipFlipped = !clipFlipped;
@@ -806,24 +938,29 @@ invertSwitch.onclick = ()=>{
   applyImageFilter();
 };
 
+const _tmpTarget = new THREE.Vector3();
 function animate(){
   requestAnimationFrame(animate);
   controls.update();
-  headlight.position.copy(camera.position);
-  headlight.target.position.copy(controls.target);
+  uniforms.uCameraLocal.value.copy(camera.position);
+  // Headlamp-style light direction: approximated as a fixed direction
+  // (camera -> target) rather than recomputed per-sample, which is a
+  // reasonable approximation given the volume is much smaller than the
+  // camera distance from it.
+  _tmpTarget.subVectors(camera.position, controls.target).normalize();
+  uniforms.uLightDir.value.copy(_tmpTarget);
   renderer.render(scene, camera);
 }
 animate();
 
-setTimeout(()=>{
-  if(loadedCount < 4){
-    showError('mesh decode timed out — try re-downloading the file');
-  }
-}, 20000);
-
 } // end boot()
 
-boot(THREE, OrbitControls, GLTFLoader);
+boot(THREE, OrbitControls).catch(e => {
+  const el = document.getElementById('loading');
+  el.querySelector('.msg').textContent = 'LOAD ERROR — ' + e.message;
+  el.querySelector('.spinner').style.display = 'none';
+  console.error(e);
+});
 
 // Mobile controls drawer
 const navToggle = document.getElementById('navToggle');
