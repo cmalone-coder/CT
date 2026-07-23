@@ -309,7 +309,18 @@ def lerp_color(t, stops):
 
 
 METAL_COLOR = (0xbf, 0xc1, 0xc7)  # neutral silver-gray, titanium implant hardware
-METAL_HU_THRESHOLD = 5500
+# Recalibrated against this patient's actual confirmed hardware: a plate
+# connecting the right maxilla to the orbital bone, located and verified via
+# the scanner's own segmented 3D render plus direct voxel inspection (a
+# compact, non-streaking, geometrically regular high-HU cluster spatially
+# separate from the dental arch). Its own per-vertex sampled density peaks
+# at ~5039 HU, well below the previous 5500 cutoff -- which is exactly why
+# nothing was being flagged. Teeth in the same scan peak at ~3969 HU sampled.
+# 4300 sits between the two with margin on both sides; the gap is narrow
+# (real overlap exists in the underlying density distributions), so this
+# won't be perfectly precise -- the scanner's own built-in segmentation
+# isn't either.
+METAL_HU_THRESHOLD = 4300
 
 SKIN_STOPS = [
     (0.00, (0xb9, 0x7a, 0x57)),  # deeper tan (shadow / jaw / neck)
