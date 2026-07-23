@@ -70,7 +70,8 @@
   }
   .layer-btn:hover{border-color:var(--amber-dim);}
   .layer-btn.active{color:var(--amber); border-color:var(--amber-dim); background:#1a1815;}
-  .layer-btn .swatch{width:9px; height:9px; border-radius:50%; margin-right:8px; display:inline-block;}
+  .layer-btn .swatch, .swatch{width:9px; height:9px; border-radius:50%; margin-right:8px; display:inline-block;}
+  .toggle-label{display:flex; align-items:center;}
 
   .slider-row{display:flex; align-items:center; gap:10px; margin-top:4px;}
   input[type=range]{
@@ -196,7 +197,7 @@
     <a href="gallery.html" class="nav-link">View original slices →</a>
   </div>
   <div class="disclaimer">
-    Mesh generated directly from CT voxel data (marching cubes, bone ≥250 HU / skin ≥ -300 HU), colored by local tissue density.<br>
+    Bone, teeth, metal hardware, and soft tissue are independently segmented from the raw CT volume (density + connected-component + watershed classification, not one mesh colored after the fact), each rendered as its own mesh.<br>
     For informational discussion only — not a diagnostic tool.
   </div>
 </header>
@@ -205,12 +206,24 @@
 <div class="layout">
   <nav id="sideNav">
     <div class="control-group">
-      <label>Layers</label>
+      <label>Structures</label>
       <div class="layer-btns">
-        <div class="layer-btn active" id="btn-bone"><span><span class="swatch" style="background:#e8e2d4"></span>Bone</span></div>
-        <div class="layer-btn" id="btn-skin"><span><span class="swatch" style="background:#c98a6b"></span>Skin surface</span></div>
-        <div class="layer-btn" id="btn-both"><span><span class="swatch" style="background:#8899aa"></span>Both</span></div>
-        <div class="layer-btn" id="btn-complete"><span><span class="swatch" style="background:#9fd4b8"></span>Complete (gaps closed)</span></div>
+        <div class="toggle-row">
+          <span class="toggle-label"><span class="swatch" style="background:#e8d2a0"></span>Bone</span>
+          <div class="switch on" id="toggle-bone"><div class="knob"></div></div>
+        </div>
+        <div class="toggle-row" style="margin-top:8px;">
+          <span class="toggle-label"><span class="swatch" style="background:#d9cffa"></span>Teeth</span>
+          <div class="switch on" id="toggle-tooth"><div class="knob"></div></div>
+        </div>
+        <div class="toggle-row" style="margin-top:8px;">
+          <span class="toggle-label"><span class="swatch" style="background:#298bff"></span>Metal hardware</span>
+          <div class="switch on" id="toggle-metal"><div class="knob"></div></div>
+        </div>
+        <div class="toggle-row" style="margin-top:8px;">
+          <span class="toggle-label"><span class="swatch" style="background:#c98a6b"></span>Soft tissue</span>
+          <div class="switch" id="toggle-soft_tissue"><div class="knob"></div></div>
+        </div>
       </div>
     </div>
 
@@ -218,31 +231,41 @@
       <label>Opacity</label>
       <div class="slider-row">
         <span class="val-label">Bone</span>
-        <input type="range" id="boneOpacitySlider" min="5" max="100" value="100">
-        <span class="val" id="boneOpacityVal">100%</span>
+        <input type="range" id="opacity-bone" min="5" max="100" value="100">
+        <span class="val" id="opacityVal-bone">100%</span>
       </div>
       <div class="slider-row" style="margin-top:8px;">
-        <span class="val-label">Skin</span>
-        <input type="range" id="skinOpacitySlider" min="5" max="100" value="70">
-        <span class="val" id="skinOpacityVal">70%</span>
+        <span class="val-label">Teeth</span>
+        <input type="range" id="opacity-tooth" min="5" max="100" value="100">
+        <span class="val" id="opacityVal-tooth">100%</span>
+      </div>
+      <div class="slider-row" style="margin-top:8px;">
+        <span class="val-label">Metal</span>
+        <input type="range" id="opacity-metal" min="5" max="100" value="100">
+        <span class="val" id="opacityVal-metal">100%</span>
+      </div>
+      <div class="slider-row" style="margin-top:8px;">
+        <span class="val-label">Soft tissue</span>
+        <input type="range" id="opacity-soft_tissue" min="5" max="100" value="65">
+        <span class="val" id="opacityVal-soft_tissue">65%</span>
       </div>
     </div>
 
     <div class="control-group">
-      <label>Colored by density (HU)</label>
+      <label>Bone density (HU)</label>
       <div class="legend">
         <div class="legend-bar"></div>
         <div class="legend-ticks">
-          <span>~300</span><span>~900</span><span>~1700</span><span>~2400</span>
+          <span>p5</span><span>~30%</span><span>~65%</span><span>p99.5</span>
         </div>
         <div class="legend-row" style="margin-top:8px;">
-          <span class="legend-swatch" style="background:#d9cffa"></span>&gt;2400 HU — teeth / unusually dense bone
+          <span class="legend-swatch" style="background:#d9cffa"></span>teeth (separately segmented)
         </div>
         <div class="legend-row" style="margin-top:4px;">
-          <span class="legend-swatch" style="background:#298bff"></span>confirmed hardware region (surgical plate)
+          <span class="legend-swatch" style="background:#298bff"></span>metal hardware (separately segmented)
         </div>
         <div class="legend-note">
-          Bone, teeth, and metal are separate color tiers, not one blended gradient. Teeth are still naturally dense enough to sit near the metal threshold in raw HU — the hardware color is anchored to a real detected object (density-seeded, then grown along connected geometry) rather than a single global cutoff, so it doesn't mistake teeth for hardware on density alone.
+          Every voxel in the CT volume was classified into bone / tooth / metal / soft tissue / air by a segmentation pipeline (density thresholds, real 3D connected components, and marker-controlled watershed to separate touching structures) before any mesh was built. Each structure here is its own independent mesh extracted only from its own labeled voxels — not one mesh colored by a density cutoff after the fact. The bone gradient above is calibrated from bone-only voxels; teeth and metal are flat, deliberately unmistakable colors rather than a continuation of that gradient.
         </div>
       </div>
     </div>
@@ -370,7 +393,9 @@ scene.add(headlight);
 scene.add(headlight.target);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-let boneMesh = null, skinMesh = null, boneCompleteMesh = null, skinCompleteMesh = null;
+const STRUCTURES = ['bone', 'tooth', 'metal', 'soft_tissue'];
+const structureMesh = {};   // name -> THREE.Mesh
+const structureGroup = {};  // name -> THREE.Group (positioned/visibility toggled)
 let modelCenter = new THREE.Vector3();
 
 function frameObject(obj){
@@ -394,7 +419,17 @@ const loader = new GLTFLoader();
 let loadedCount = 0;
 function checkLoaded(){
   loadedCount++;
-  if(loadedCount >= 4){
+  if(loadedCount >= STRUCTURES.length){
+    // Structures load asynchronously and are not guaranteed to resolve in
+    // STRUCTURES order, but every non-bone group must be centered using
+    // modelCenter, which only becomes correct once bone's own frameObject()
+    // has run -- so centering the *other* groups is deferred to here,
+    // after every load has settled, rather than done eagerly per-callback.
+    STRUCTURES.forEach(name => {
+      if(name === 'bone') return;
+      const group = structureGroup[name];
+      if(group) group.position.sub(modelCenter);
+    });
     document.getElementById('loading').style.display = 'none';
   }
 }
@@ -418,141 +453,84 @@ function showError(msg){
   el.querySelector('.spinner').style.display = 'none';
 }
 
+// Each structure is its own independent mesh, extracted only from its own
+// labeled voxels (see tools/generate_segmented_meshes.py) -- material
+// choice per structure reflects what it actually is now that they're no
+// longer sharing one mesh: metal gets a real metallic material instead of
+// just a vertex color, since it's isolated hardware, not a color tier
+// painted onto bone.
+const STRUCTURE_CONFIG = {
+  bone:        { b64: () => BONE_GLB_B64,        defaultOn: true,  defaultOpacity: 1.00,
+                 material: () => new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.5, metalness:0.0, transparent:true, side:THREE.DoubleSide }) },
+  tooth:       { b64: () => TOOTH_GLB_B64,        defaultOn: true,  defaultOpacity: 1.00,
+                 material: () => new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.3, metalness:0.0, transparent:true, side:THREE.DoubleSide }) },
+  metal:       { b64: () => METAL_GLB_B64,        defaultOn: true,  defaultOpacity: 1.00,
+                 material: () => new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.3, metalness:0.7, transparent:true, side:THREE.DoubleSide }) },
+  soft_tissue: { b64: () => SOFT_TISSUE_GLB_B64,  defaultOn: false, defaultOpacity: 0.65,
+                 material: () => new THREE.MeshPhysicalMaterial({ vertexColors:true, roughness:0.8, metalness:0.0, clearcoat:0.08, clearcoatRoughness:0.35, transparent:true, side:THREE.DoubleSide }) },
+};
+
 try {
-  const boneBuf = b64ToArrayBuffer(BONE_GLB_B64);
-  loader.parse(boneBuf, '', gltf => {
-    boneMesh = findFirstMesh(gltf.scene);
-    boneMesh.material = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness:0.5, metalness:0.0,
-      transparent:true, opacity:1.0,
-      side: THREE.DoubleSide
-    });
-    boneMesh.castShadow = true;
-    boneMesh.receiveShadow = true;
-    scene.add(gltf.scene);
-    sceneScale = frameObject(gltf.scene);
-    // Size the shadow-camera frustum to the actual mesh instead of a fixed
-    // guess, so shadows aren't clipped off on larger/smaller scans.
-    const shadowExtent = sceneScale * 0.75;
-    key.shadow.camera.left = -shadowExtent;
-    key.shadow.camera.right = shadowExtent;
-    key.shadow.camera.top = shadowExtent;
-    key.shadow.camera.bottom = -shadowExtent;
-    key.shadow.camera.updateProjectionMatrix();
-    checkLoaded();
-  }, err => showError('bone mesh — ' + err.message));
+  STRUCTURES.forEach(name => {
+    const cfg = STRUCTURE_CONFIG[name];
+    const b64 = cfg.b64();
+    if(!b64){ checkLoaded(); return; } // this structure had no voxels in this scan
+    const buf = b64ToArrayBuffer(b64);
+    loader.parse(buf, '', gltf => {
+      const mesh = findFirstMesh(gltf.scene);
+      mesh.material = cfg.material();
+      mesh.material.opacity = cfg.defaultOpacity;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      structureMesh[name] = mesh;
+      structureGroup[name] = gltf.scene;
 
-  const skinBuf = b64ToArrayBuffer(SKIN_GLB_B64);
-  loader.parse(skinBuf, '', gltf => {
-    skinMesh = findFirstMesh(gltf.scene);
-    skinMesh.material = new THREE.MeshPhysicalMaterial({
-      vertexColors: true, roughness:0.8, metalness:0.0,
-      clearcoat:0.08, clearcoatRoughness:0.35,
-      transparent:true, opacity:0.7,
-      side: THREE.DoubleSide
-    });
-    skinMesh.castShadow = true;
-    skinMesh.receiveShadow = true;
-    gltf.scene.position.sub(modelCenter);
-    gltf.scene.visible = false;
-    scene.add(gltf.scene);
-    skinMesh.userData.group = gltf.scene;
-    checkLoaded();
-  }, err => showError('skin mesh — ' + err.message));
-
-  const boneCBuf = b64ToArrayBuffer(BONE_COMPLETE_GLB_B64);
-  loader.parse(boneCBuf, '', gltf => {
-    boneCompleteMesh = findFirstMesh(gltf.scene);
-    boneCompleteMesh.material = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness:0.5, metalness:0.0,
-      transparent:true, opacity:1.0,
-      side: THREE.DoubleSide
-    });
-    boneCompleteMesh.castShadow = true;
-    boneCompleteMesh.receiveShadow = true;
-    gltf.scene.position.sub(modelCenter);
-    gltf.scene.visible = false;
-    scene.add(gltf.scene);
-    boneCompleteMesh.userData.group = gltf.scene;
-    checkLoaded();
-  }, err => showError('repaired bone mesh — ' + err.message));
-
-  const skinCBuf = b64ToArrayBuffer(SKIN_COMPLETE_GLB_B64);
-  loader.parse(skinCBuf, '', gltf => {
-    skinCompleteMesh = findFirstMesh(gltf.scene);
-    skinCompleteMesh.material = new THREE.MeshPhysicalMaterial({
-      vertexColors: true, roughness:0.8, metalness:0.0,
-      clearcoat:0.08, clearcoatRoughness:0.35,
-      transparent:true, opacity:0.7,
-      side: THREE.DoubleSide
-    });
-    skinCompleteMesh.castShadow = true;
-    skinCompleteMesh.receiveShadow = true;
-    gltf.scene.position.sub(modelCenter);
-    gltf.scene.visible = false;
-    scene.add(gltf.scene);
-    skinCompleteMesh.userData.group = gltf.scene;
-    checkLoaded();
-  }, err => showError('repaired skin mesh — ' + err.message));
+      if(name === 'bone'){
+        // Bone anchors the scene framing/centering -- every other
+        // structure's group is repositioned by the same modelCenter so
+        // they stay spatially aligned once bone has defined it.
+        scene.add(gltf.scene);
+        sceneScale = frameObject(gltf.scene);
+        const shadowExtent = sceneScale * 0.75;
+        key.shadow.camera.left = -shadowExtent;
+        key.shadow.camera.right = shadowExtent;
+        key.shadow.camera.top = shadowExtent;
+        key.shadow.camera.bottom = -shadowExtent;
+        key.shadow.camera.updateProjectionMatrix();
+      } else {
+        // Centering for non-bone groups happens once in checkLoaded(),
+        // after every structure has loaded -- see the comment there.
+        scene.add(gltf.scene);
+      }
+      gltf.scene.visible = cfg.defaultOn;
+      checkLoaded();
+    }, err => showError(name + ' mesh — ' + err.message));
+  });
 } catch(e) {
   showError(e.message);
 }
 
-// Layer toggle logic
-const btnBone = document.getElementById('btn-bone');
-const btnSkin = document.getElementById('btn-skin');
-const btnBoth = document.getElementById('btn-both');
-const btnComplete = document.getElementById('btn-complete');
-const boneOpacitySlider = document.getElementById('boneOpacitySlider');
-const skinOpacitySlider = document.getElementById('skinOpacitySlider');
+// Per-structure toggle + opacity controls
+STRUCTURES.forEach(name => {
+  const toggle = document.getElementById('toggle-' + name);
+  const slider = document.getElementById('opacity-' + name);
+  const valEl = document.getElementById('opacityVal-' + name);
+  if(!toggle || !slider) return;
 
-function applyOpacities(){
-  const bOp = boneOpacitySlider.value/100;
-  const sOp = skinOpacitySlider.value/100;
-  if(boneMesh) boneMesh.material.opacity = bOp;
-  if(boneCompleteMesh) boneCompleteMesh.material.opacity = bOp;
-  if(skinMesh) skinMesh.material.opacity = sOp;
-  if(skinCompleteMesh) skinCompleteMesh.material.opacity = sOp;
-  document.getElementById('boneOpacityVal').textContent = boneOpacitySlider.value + '%';
-  document.getElementById('skinOpacityVal').textContent = skinOpacitySlider.value + '%';
-}
-boneOpacitySlider.addEventListener('input', applyOpacities);
-skinOpacitySlider.addEventListener('input', applyOpacities);
+  toggle.onclick = () => {
+    const group = structureGroup[name];
+    if(!group) return;
+    const on = !group.visible;
+    group.visible = on;
+    toggle.classList.toggle('on', on);
+  };
 
-function setMode(mode){
-  [btnBone, btnSkin, btnBoth, btnComplete].forEach(b=>b.classList.remove('active'));
-  if(!boneMesh) return;
-  const boneGroup = boneMesh.parent;
-  const skinGroup = skinMesh ? skinMesh.userData.group : null;
-  const boneCGroup = boneCompleteMesh ? boneCompleteMesh.userData.group : null;
-  const skinCGroup = skinCompleteMesh ? skinCompleteMesh.userData.group : null;
-
-  boneGroup.visible = false;
-  if(skinGroup) skinGroup.visible = false;
-  if(boneCGroup) boneCGroup.visible = false;
-  if(skinCGroup) skinCGroup.visible = false;
-
-  if(mode === 'bone'){
-    btnBone.classList.add('active');
-    boneGroup.visible = true;
-  } else if(mode === 'skin'){
-    btnSkin.classList.add('active');
-    if(skinGroup) skinGroup.visible = true;
-  } else if(mode === 'both'){
-    btnBoth.classList.add('active');
-    boneGroup.visible = true;
-    if(skinGroup) skinGroup.visible = true;
-  } else if(mode === 'complete'){
-    btnComplete.classList.add('active');
-    if(boneCGroup) boneCGroup.visible = true;
-    if(skinCGroup) skinCGroup.visible = true;
-  }
-  applyOpacities();
-}
-btnBone.onclick = ()=> setMode('bone');
-btnSkin.onclick = ()=> setMode('skin');
-btnBoth.onclick = ()=> setMode('both');
-btnComplete.onclick = ()=> setMode('complete');
+  slider.addEventListener('input', () => {
+    const mesh = structureMesh[name];
+    if(mesh) mesh.material.opacity = slider.value / 100;
+    valEl.textContent = slider.value + '%';
+  });
+});
 
 // Resize handling
 window.addEventListener('resize', ()=>{

@@ -15,8 +15,10 @@ mixed together in one percentile calculation; teeth/metal: flat, distinct,
 unmistakable colors per prior explicit request; soft tissue: the existing
 skin gradient).
 
-Output: independent GLB files, one per structure -- not wired into the
-viewer yet. That's Phase 4, only after these are inspected.
+Output: independent GLB files, one per structure (for inspection), plus
+data.js with each mesh base64-embedded as its own constant -- the format
+the viewer (Phase 4) loads directly, replacing the old single bone+skin
+data.js the pre-segmentation pipeline produced.
 """
 import argparse
 import os
@@ -141,6 +143,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--npz", required=True)
     ap.add_argument("--out-dir", default="segmented_meshes")
+    ap.add_argument("--data-js-out", default=None, help="if set, also write a data.js with each mesh base64-embedded")
     ap.add_argument("--bone-faces", type=int, default=800_000)
     ap.add_argument("--teeth-faces", type=int, default=200_000)
     ap.add_argument("--soft-tissue-faces", type=int, default=150_000)
@@ -212,13 +215,28 @@ def main():
     print(f"  [soft_tissue] final: {len(soft_mesh.vertices)} verts, {len(soft_mesh.faces)} faces")
 
     print(f"\nExporting GLBs to {args.out_dir}/ ...")
-    for name, mesh in [("bone", bone_mesh), ("tooth", tooth_mesh), ("metal", metal_mesh), ("soft_tissue", soft_mesh)]:
+    meshes = {"bone": bone_mesh, "tooth": tooth_mesh, "metal": metal_mesh, "soft_tissue": soft_mesh}
+    for name, mesh in meshes.items():
         if mesh is None:
             continue
         path = os.path.join(args.out_dir, f"{name}.glb")
         _ = mesh.vertex_normals  # force normals into the export, same fix as the original pipeline
         mesh.export(path, file_type="glb")
         print(f"  wrote {path} ({os.path.getsize(path)/1e6:.2f} MB)")
+
+    if args.data_js_out:
+        print(f"\nEncoding GLBs into {args.data_js_out} ...")
+        const_names = {"bone": "BONE_GLB_B64", "tooth": "TOOTH_GLB_B64",
+                        "metal": "METAL_GLB_B64", "soft_tissue": "SOFT_TISSUE_GLB_B64"}
+        with open(args.data_js_out, "w") as f:
+            for name, mesh in meshes.items():
+                const = const_names[name]
+                if mesh is None:
+                    f.write(f'const {const} = null;\n')
+                    continue
+                f.write(f'const {const} = "{export_b64(mesh)}";\n')
+        size_mb = os.path.getsize(args.data_js_out) / 1e6
+        print(f"Wrote {args.data_js_out} ({size_mb:.1f} MB)")
 
 
 if __name__ == "__main__":
