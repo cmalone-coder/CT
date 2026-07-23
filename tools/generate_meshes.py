@@ -127,10 +127,13 @@ def build_volume(slices):
 
 
 def validate_kernel_choice(sharp_vol, soft_vol):
-    """Print sharpness/noise diagnostics -- informational, doesn't gate the
-    already-decided sharp-for-bone/soft-for-skin split."""
+    """Print sharpness/noise diagnostics for both kernels -- informational.
+    The sharp kernel's higher Laplacian variance turned out to be mostly
+    noise rather than real detail once actually rendered, so both tissues
+    are sourced from the soft kernel; kept here for visibility into that
+    tradeoff, not to gate the choice."""
     mid = sharp_vol["hu"].shape[0] // 2
-    for name, vol in [("sharp(bone src)", sharp_vol), ("soft(skin src)", soft_vol)]:
+    for name, vol in [("sharp (unused)", sharp_vol), ("soft (bone+skin src)", soft_vol)]:
         sl = vol["hu"][mid].astype(np.float64)
         bone_mask = sl >= 250
         tissue_mask = (sl > 0) & (sl < 80)
@@ -197,15 +200,10 @@ def decimate(mesh, target_faces):
 # Density-based vertex coloring
 # ---------------------------------------------------------------------------
 
-def sample_hu_along_normals(mesh_raw, vol, offset_mm=1.5):
-    """Sample HU ~offset_mm inward along the raw (undecimated) marching-cubes
-    normals -- these are reliable pre-decimation, unlike normals recomputed
-    after trimesh decimation."""
-    normals = mesh_raw.vertex_normals
-    sample_points_mm = mesh_raw.vertices - normals * offset_mm
-
-    # Convert display-space mm back to (slice_idx, row_idx, col_idx) to sample
-    # the HU volume. Invert the same transform used in volume_to_display_mesh.
+def _sample_hu_at_points(sample_points_mm, vol):
+    """Convert display-space mm points back to (slice_idx, row_idx, col_idx)
+    and sample the HU volume there. Inverts the transform used in
+    volume_to_display_mesh."""
     origin = vol["origin"]
     row_cosine = vol["row_cosine"]
     col_cosine = vol["col_cosine"]
@@ -218,20 +216,47 @@ def sample_hu_along_normals(mesh_raw, vol, offset_mm=1.5):
     P = -neg_P
     patient = np.stack([L, P, S], axis=1) - origin
 
-    # Solve for (col_idx*col_spacing, row_idx*row_spacing, slice_idx*thickness)
-    # via the orthonormal-ish basis (row_cosine, col_cosine, normal).
-    basis = np.stack([row_cosine, col_cosine, normal], axis=1)  # 3x3, columns are basis vectors
-    coeffs = np.linalg.solve(basis, patient.T).T  # Nx3: [col_mm, row_mm, slice_mm]
+    basis = np.stack([row_cosine, col_cosine, normal], axis=1)
+    coeffs = np.linalg.solve(basis, patient.T).T
 
     col_idx = coeffs[:, 0] / vol["col_spacing"]
     row_idx = coeffs[:, 1] / vol["row_spacing"]
     slice_idx = coeffs[:, 2] / vol["slice_thickness"]
 
     coords = np.stack([slice_idx, row_idx, col_idx], axis=0)
-    hu_vals = ndimage.map_coordinates(
+    return ndimage.map_coordinates(
         vol["hu"].astype(np.float32), coords, order=1, mode="nearest"
     )
-    return hu_vals
+
+
+def sample_hu_along_normals(mesh_raw, vol, offset_mm=1.5):
+    """Sample HU ~offset_mm inward along the raw (undecimated) marching-cubes
+    normals -- these are reliable pre-decimation, unlike normals recomputed
+    after trimesh decimation.
+
+    Which way "inward" points isn't safe to assume: it depends on marching
+    cubes' winding convention for this specific volume, which empirically
+    was NOT consistent between the sharp- and soft-kernel reconstructions of
+    the same scan (one needed +offset, the other -offset, despite identical
+    coordinate transforms) -- so both directions are tried on a subsample and
+    whichever moves toward higher density (the correct direction for any
+    outside-low/inside-high isosurface, which is every threshold used here)
+    is picked automatically.
+    """
+    normals = mesh_raw.vertex_normals
+    rng = np.random.default_rng(0)
+    probe_idx = rng.choice(len(mesh_raw.vertices), size=min(3000, len(mesh_raw.vertices)), replace=False)
+    probe_verts = mesh_raw.vertices[probe_idx]
+    probe_normals = normals[probe_idx]
+
+    med_pos = np.median(_sample_hu_at_points(probe_verts - probe_normals * offset_mm, vol))
+    med_neg = np.median(_sample_hu_at_points(probe_verts + probe_normals * offset_mm, vol))
+    sign = -1.0 if med_neg > med_pos else 1.0
+    print(f"    normal-direction probe: -normal*offset median={med_pos:.0f}, "
+          f"+normal*offset median={med_neg:.0f} -> using sign={sign:+.0f}")
+
+    sample_points_mm = mesh_raw.vertices - normals * (offset_mm * sign)
+    return _sample_hu_at_points(sample_points_mm, vol)
 
 
 def transfer_to_decimated(raw_mesh, raw_values, decimated_mesh):
@@ -257,13 +282,7 @@ def lerp_color(t, stops):
     return out
 
 
-BONE_STOPS = [
-    (0.00, (0x8a, 0x4a, 0x1e)),  # dark burnt-orange, thin/porous bone
-    (0.35, (0xd8, 0xa5, 0x4a)),  # gold
-    (0.75, (0xf5, 0xef, 0xe2)),  # crisp white, dense cortical
-    (1.00, (0xf8, 0xfb, 0xff)),  # near-white ceiling
-]
-METAL_COLOR = (0x5a, 0xd2, 0xff)  # cyan
+METAL_COLOR = (0xbf, 0xc1, 0xc7)  # neutral silver-gray, titanium implant hardware
 METAL_HU_THRESHOLD = 5500
 
 SKIN_STOPS = [
@@ -272,12 +291,28 @@ SKIN_STOPS = [
 ]
 
 
-def color_bone(hu_values, p5, p95):
-    t = (hu_values - p5) / (p95 - p5)
-    colors = lerp_color(t, BONE_STOPS)
+def color_bone(hu_values, p5, p95, p995):
+    # Explicit HU-anchored stops spanning the *entire* range up to the metal
+    # cutoff -- a plain p5-p95 normalization clips everything denser than p95
+    # (typical cortical bone AND tooth enamel both blow past it) to one flat
+    # color, which is exactly why teeth and bone were indistinguishable.
+    # The extra stops between p95 and the metal threshold give dense cortical
+    # bone and enamel-range density their own visually distinct (but still
+    # continuous, not hard-classified) colors.
+    hu_stops = [
+        (p5,                        (0x8a, 0x4a, 0x1e)),  # dark burnt-orange, thin/porous bone
+        (p5 + (p95 - p5) * 0.35,    (0xd8, 0xa5, 0x4a)),  # gold
+        (p95,                       (0xf0, 0xe6, 0xd2)),  # warm off-white, typical dense cortical
+        (p995,                      (0xff, 0xff, 0xff)),  # bright white, very dense cortical
+        (METAL_HU_THRESHOLD - 1,    (0xd8, 0xc8, 0xff)),  # pale violet-white, enamel-range density
+    ]
+    lo, hi = hu_stops[0][0], hu_stops[-1][0]
+    stops01 = [((hv - lo) / (hi - lo), c) for hv, c in hu_stops]
+    t = (hu_values - lo) / (hi - lo)
+    colors = lerp_color(t, stops01)
     metal_mask = hu_values >= METAL_HU_THRESHOLD
     colors[metal_mask] = np.array(METAL_COLOR, dtype=np.float64)
-    return (colors / 255.0)
+    return colors / 255.0
 
 
 def color_skin(hu_values):
@@ -425,36 +460,43 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dicom-zip", required=True)
     ap.add_argument("--data-js-out", default="data.js")
-    ap.add_argument("--bone-faces", type=int, default=280_000)
+    ap.add_argument("--bone-faces", type=int, default=450_000)
     ap.add_argument("--skin-faces", type=int, default=150_000)
     args = ap.parse_args()
 
     print("Loading DICOM series ...")
     series = load_series(args.dicom_zip)
     sharp_slices, soft_slices = pick_target_series(series)
-    print(f"  sharp (bone) kernel: {soft_slices[0].get('ConvolutionKernel')} vs "
-          f"{sharp_slices[0].get('ConvolutionKernel')}")
 
-    sharp_vol = build_volume(sharp_slices)  # bone source
-    soft_vol = build_volume(soft_slices)  # skin source
+    sharp_vol = build_volume(sharp_slices)
+    soft_vol = build_volume(soft_slices)
 
     print("Validating kernel choice (informational) ...")
     validate_kernel_choice(sharp_vol, soft_vol)
 
-    bone_hu_all = sharp_vol["hu"]
+    # Both bone and skin now source from the soft-tissue kernel. The sharp
+    # kernel's higher Laplacian-variance "sharpness" turned out to be mostly
+    # noise, not real trabecular detail -- decimation smooths noisy bumps
+    # right along with genuine fine structure, so the sharp-kernel bone
+    # actually looked *less* detailed once rendered, confirmed by direct
+    # visual comparison against the previous (soft-kernel) pipeline.
+    bone_vol = soft_vol
+    skin_vol = soft_vol
+
+    bone_hu_all = bone_vol["hu"]
     bone_voxels = bone_hu_all[bone_hu_all >= 250]
-    p5, p95 = np.percentile(bone_voxels, [5, 95])
-    print(f"Bone HU recalibration range: p5={p5:.0f} p95={p95:.0f}")
+    p5, p95, p995 = np.percentile(bone_voxels, [5, 95, 99.5])
+    print(f"Bone HU recalibration range: p5={p5:.0f} p95={p95:.0f} p99.5={p995:.0f}")
 
     print("Processing bone ...")
     bone_mesh, bone_complete = process_tissue(
-        sharp_vol, level=250, target_faces=args.bone_faces,
-        color_fn=lambda hu: color_bone(hu, p5, p95), offset_mm=1.5,
+        bone_vol, level=250, target_faces=args.bone_faces,
+        color_fn=lambda hu: color_bone(hu, p5, p95, p995), offset_mm=1.5,
     )
 
     print("Processing skin ...")
     skin_mesh, skin_complete = process_tissue(
-        soft_vol, level=-300, target_faces=args.skin_faces,
+        skin_vol, level=-300, target_faces=args.skin_faces,
         color_fn=color_skin, offset_mm=1.5,
     )
 
