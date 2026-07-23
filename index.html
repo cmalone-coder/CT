@@ -337,6 +337,15 @@ scene.add(new THREE.AmbientLight(0xffffff, 0.45));
 // of fully flattening the scene the way more flat ambient would.
 const hemi = new THREE.HemisphereLight(0x88949c, 0x2a1f18, 0.4);
 scene.add(hemi);
+// Headlight: follows the camera so whatever side you're currently looking at
+// always has some real illumination, instead of going dark when it's turned
+// away from the fixed key light. The key/fill/rim/hemi lights above stay
+// genuinely fixed in the scene (they're the ones giving real shadow
+// definition) -- this is a deliberate supplement, not a replacement.
+const headlight = new THREE.DirectionalLight(0xffffff, 0.5);
+headlight.target.position.set(0, 0, 0);
+scene.add(headlight);
+scene.add(headlight.target);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 let boneMesh = null, skinMesh = null, boneCompleteMesh = null, skinCompleteMesh = null;
@@ -557,6 +566,8 @@ invertSwitch.onclick = ()=>{
 function animate(){
   requestAnimationFrame(animate);
   controls.update();
+  headlight.position.copy(camera.position);
+  headlight.target.position.copy(controls.target);
   renderer.render(scene, camera);
 }
 animate();
