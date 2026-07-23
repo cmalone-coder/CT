@@ -197,7 +197,7 @@
     <a href="gallery.html" class="nav-link">View original slices →</a>
   </div>
   <div class="disclaimer">
-    Direct volume rendering (GPU raymarching) of the segmented CT volume — no surface mesh is extracted, so there's no decimation, no marching-cubes faceting, and no mesh debris to introduce artifacts. Bone/teeth/metal/soft-tissue classification comes from the same segmentation pipeline as before (density + connected components + watershed).<br>
+    Direct volume rendering (GPU raymarching) of the raw CT density field — no surface mesh is extracted, so there's no decimation, no marching-cubes faceting, and no mesh debris to introduce artifacts. Bone (including teeth, rendered as one continuous dense structure) comes from density alone; metal hardware is highlighted using the validated segmentation label.<br>
     For informational discussion only — not a diagnostic tool.
   </div>
 </header>
@@ -211,10 +211,6 @@
         <div class="toggle-row">
           <span class="toggle-label"><span class="swatch" style="background:#e8d2a0"></span>Bone</span>
           <div class="switch on" id="toggle-bone"><div class="knob"></div></div>
-        </div>
-        <div class="toggle-row" style="margin-top:8px;">
-          <span class="toggle-label"><span class="swatch" style="background:#d9cffa"></span>Teeth</span>
-          <div class="switch on" id="toggle-tooth"><div class="knob"></div></div>
         </div>
         <div class="toggle-row" style="margin-top:8px;">
           <span class="toggle-label"><span class="swatch" style="background:#298bff"></span>Metal hardware</span>
@@ -233,11 +229,6 @@
         <span class="val-label">Bone</span>
         <input type="range" id="opacity-bone" min="5" max="100" value="100">
         <span class="val" id="opacityVal-bone">100%</span>
-      </div>
-      <div class="slider-row" style="margin-top:8px;">
-        <span class="val-label">Teeth</span>
-        <input type="range" id="opacity-tooth" min="5" max="100" value="100">
-        <span class="val" id="opacityVal-tooth">100%</span>
       </div>
       <div class="slider-row" style="margin-top:8px;">
         <span class="val-label">Metal</span>
@@ -259,13 +250,10 @@
           <span>p5</span><span>~30%</span><span>~65%</span><span>p99.5</span>
         </div>
         <div class="legend-row" style="margin-top:8px;">
-          <span class="legend-swatch" style="background:#d9cffa"></span>teeth (separately segmented)
-        </div>
-        <div class="legend-row" style="margin-top:4px;">
-          <span class="legend-swatch" style="background:#298bff"></span>metal hardware (separately segmented)
+          <span class="legend-swatch" style="background:#298bff"></span>metal hardware (segmentation label)
         </div>
         <div class="legend-note">
-          Every voxel in the CT volume was classified into bone / tooth / metal / soft tissue / air by a segmentation pipeline (density thresholds, real 3D connected components, and marker-controlled watershed to separate touching structures). The renderer marches a ray through the actual voxel grid for every pixel and colors each sample by its classification and density — the bone gradient is calibrated from bone-only voxels; teeth and metal are flat, deliberately unmistakable colors.
+          Bone (including teeth — rendered as one continuous dense structure, not separated) comes directly from density: the renderer marches a ray through the real voxel grid for every pixel and fades opacity in smoothly above the bone density floor, calibrated from this scan's own bone statistics. Metal hardware is the one structure still driven by the segmentation pipeline's label (density thresholds, connected components, and watershed), since that classification was independently validated against the confirmed surgical plate.
         </div>
       </div>
     </div>
@@ -471,6 +459,20 @@ labelTexture.needsUpdate = true;
 // window bounds.
 function normHu(hu){ return (hu - meta.windowMinHu) / (meta.windowMaxHu - meta.windowMinHu); }
 
+// Bone density floor/top ramp -- computed once here, in real HU, and
+// shared by both the shader (normalized, via uBoneP5/uBoneTopNorm) and
+// the CPU-side click-to-identify/measurement pick logic below
+// (boneFloorHU), so the two can never silently drift apart. Proportional
+// to this scan's own bone-only calibration (boneP5/boneP995) rather than
+// independent hardcoded HU constants, so it self-calibrates if this
+// pipeline is ever rerun on different data. The top is deliberately only
+// 25% of the way to p99.5 -- ordinary solid cortical bone is nowhere near
+// the density ceiling, and teeth/resin/metal-adjacent voxels sit far
+// above it regardless, so they saturate to full opacity automatically
+// with no special-case code.
+const boneFloorHU = meta.boneP5;
+const boneTopHU = meta.boneP5 + 0.25 * (meta.boneP995 - meta.boneP5);
+
 const uniforms = {
   uHuTex: { value: huTexture },
   uLabelTex: { value: labelTexture },
@@ -478,19 +480,19 @@ const uniforms = {
   uCameraLocal: { value: new THREE.Vector3() },
   uBoneP5: { value: normHu(meta.boneP5) },
   uBoneP995: { value: normHu(meta.boneP995) },
+  uBoneTopNorm: { value: normHu(boneTopHU) },
   uSoftP5: { value: normHu(meta.softP5) },
   uSoftP95: { value: normHu(meta.softP95) },
   uBoneOpacity: { value: 1.0 },
-  uToothOpacity: { value: 1.0 },
   uMetalOpacity: { value: 1.0 },
   uSoftOpacity: { value: 0.65 },
   uBoneVisible: { value: 1.0 },
-  uToothVisible: { value: 1.0 },
   uMetalVisible: { value: 1.0 },
   uSoftVisible: { value: 0.0 },
   uClipEnabled: { value: 0.0 },
   uClipPlane: { value: new THREE.Vector4(0, 1, 0, 0) },
   uLightDir: { value: new THREE.Vector3(0, 0, 1) },
+  uTargetStep: { value: 0.35 },  // mm; raised during camera drag, see the OrbitControls start/end handlers below
 };
 
 const vertexShader = `
@@ -506,16 +508,24 @@ void main(){
 
 // Raymarching volume renderer. Ray-box intersection via the slab method
 // (robust whether the camera is outside or inside the box -- tNear is
-// clamped to 0 for the inside case), then fixed-step front-to-back alpha
-// compositing. Opacity is gated by the *label* (exact per-voxel
-// classification from the segmentation pipeline, not a density guess),
-// so a real bone voxel stays visible even where its density is on the
-// lower end -- unlike a pure HU-windowing transfer function (what most
-// generic volume renderers, including clinical ones, actually use), this
-// doesn't lose real anatomy at the edges of its own density range. Color
-// for bone/soft-tissue comes from a smooth density gradient within that
-// structure; teeth/metal are flat, unmistakable colors, matching the
-// mesh-based viewer's design before this replaced it.
+// clamped to 0 for the inside case). Step count is adaptive to the real
+// voxel pitch (not a fixed count over a variable-length ray, which
+// undersampled long rays and caused visible layering) and opacity
+// accumulates via the Beer-Lambert absorption law -- physically correct
+// and, critically, invariant to step size, so the render doesn't change
+// appearance if the step count/target is retuned later.
+//
+// Bone (and teeth -- deliberately not separated, they're just very dense
+// bone-colored material) is driven by density alone: a smooth ramp from
+// this scan's own bone-only p5 up to a modest fraction of its way to
+// p99.5, not by the segmentation's tooth/bone classification label. That
+// label boundary was never reliably separable by density in this scan
+// (front teeth are resin-restored, physically fused to adjacent bone
+// with no density valley between them) -- dropping the classification
+// requirement for the *rendered* bone map sidesteps that problem
+// entirely rather than trying to solve it. Metal keeps using its label
+// (independently validated against the confirmed surgical plate) as a
+// highlight layered on top, since that classification is trustworthy.
 const fragmentShader = `
 precision highp float;
 precision highp sampler3D;
@@ -527,17 +537,29 @@ uniform sampler3D uHuTex;
 uniform sampler3D uLabelTex;
 uniform vec3 uBoxSize;
 uniform vec3 uCameraLocal;
-uniform float uBoneP5, uBoneP995;
+uniform float uBoneP5, uBoneP995, uBoneTopNorm;
 uniform float uSoftP5, uSoftP95;
-uniform float uBoneOpacity, uToothOpacity, uMetalOpacity, uSoftOpacity;
-uniform float uBoneVisible, uToothVisible, uMetalVisible, uSoftVisible;
+uniform float uBoneOpacity, uMetalOpacity, uSoftOpacity;
+uniform float uBoneVisible, uMetalVisible, uSoftVisible;
 uniform float uClipEnabled;
 uniform vec4 uClipPlane;
 uniform vec3 uLightDir;
+uniform float uTargetStep;
 
-const vec3 TOOTH_COLOR = vec3(0.851, 0.812, 0.980);
 const vec3 METAL_COLOR = vec3(0.161, 0.545, 1.0);
-const int MAX_STEPS = 340;
+const int MAX_STEPS = 1024;
+const int MIN_STEPS = 32;
+
+// Absorption coefficients (1/mm) -- how "thick" each material needs to be
+// (at full shape=1.0) to become opaque. Bone: ~99% opaque after 1.5mm of
+// solid material. Metal: near-full opacity even in a single raymarch step,
+// so a thin plate can't under-render regardless of viewing angle. Soft
+// tissue: chosen to match the previous flat-alpha look's density, now
+// applied through the same physically-correct (step-size-invariant) form
+// so it doesn't reintroduce banding once step size varies per ray.
+const float BONE_COEFF = 3.0;
+const float METAL_COEFF = 8.0;
+const float SOFT_COEFF = 0.04;
 
 vec3 boneGradient(float hu){
   float t = clamp((hu - uBoneP5) / max(uBoneP995 - uBoneP5, 0.0001), 0.0, 1.0);
@@ -574,6 +596,15 @@ vec2 hitBox(vec3 orig, vec3 dir){
   return vec2(max(max(tMin.x, tMin.y), tMin.z), min(min(tMax.x, tMax.y), tMax.z));
 }
 
+// Interleaved Gradient Noise (Jimenez 2014) -- a per-pixel-stable dither
+// on the ray start position, to break up residual step-aliasing layering
+// into much-less-visible noise. Deliberately NOT re-randomized per frame:
+// there's no temporal accumulation/TAA here, so a time-varying jitter
+// would shimmer during rotation instead of just fixing banding.
+float jitterHash(vec2 co){
+  return fract(52.9829189 * fract(dot(co, vec2(0.06711056, 0.00583715))));
+}
+
 void main(){
   vec3 rayDir = normalize(vLocalPos - uCameraLocal);
   vec2 hit = hitBox(uCameraLocal, rayDir);
@@ -581,15 +612,20 @@ void main(){
   float tFar = hit.y;
   if(tFar <= tNear) discard;
 
-  float stepSize = (tFar - tNear) / float(MAX_STEPS);
+  float rayLength = tFar - tNear;
+  int numSteps = clamp(int(rayLength / uTargetStep), MIN_STEPS, MAX_STEPS);
+  float stepSize = rayLength / float(numSteps);
   vec3 stepVec = rayDir * stepSize;
-  vec3 samplePos = uCameraLocal + rayDir * tNear;
-  vec3 gradStep = vec3(0.7);
+
+  float jitter = jitterHash(gl_FragCoord.xy);
+  vec3 samplePos = uCameraLocal + rayDir * (tNear + jitter * stepSize);
+  vec3 gradStep = vec3(0.66);
 
   vec3 accumColor = vec3(0.0);
   float accumAlpha = 0.0;
 
   for(int i = 0; i < MAX_STEPS; i++){
+    if(i >= numSteps) break;
     if(accumAlpha > 0.98) break;
 
     bool skip = false;
@@ -602,23 +638,32 @@ void main(){
       float huNorm = texture(uHuTex, uvw).r;
       int labelId = int(texture(uLabelTex, uvw).r * 255.0 + 0.5);
 
-      float alpha = 0.0;
+      // Strict priority chain, not independent per-material branches --
+      // a single sample contributes exactly one material's absorption,
+      // never a double-composite of e.g. bone-density-positive AND
+      // soft-tissue-labeled at the same partial-volume boundary voxel.
+      float coeff = 0.0;
+      float shape = 0.0;
       vec3 color = vec3(0.0);
-      if(labelId == 3){
-        alpha = uBoneOpacity * uBoneVisible * 0.45;
-        color = boneGradient(huNorm);
-      } else if(labelId == 4){
-        alpha = uToothOpacity * uToothVisible * 0.5;
-        color = TOOTH_COLOR;
-      } else if(labelId == 5){
-        alpha = uMetalOpacity * uMetalVisible * 0.6;
+      if(labelId == 5){
+        shape = 1.0;
         color = METAL_COLOR;
-      } else if(labelId == 2){
-        alpha = uSoftOpacity * uSoftVisible * 0.035;
-        color = skinGradient(huNorm);
+        coeff = METAL_COEFF * uMetalOpacity * uMetalVisible;
+      } else {
+        float boneShape = smoothstep(uBoneP5, uBoneTopNorm, huNorm);
+        if(boneShape > 0.0){
+          shape = boneShape;
+          color = boneGradient(huNorm);
+          coeff = BONE_COEFF * uBoneOpacity * uBoneVisible;
+        } else if(labelId == 2){
+          shape = 1.0;
+          color = skinGradient(huNorm);
+          coeff = SOFT_COEFF * uSoftOpacity * uSoftVisible;
+        }
       }
 
-      if(alpha > 0.001){
+      float totalCoeff = coeff * shape;
+      if(totalCoeff > 0.0001){
         float hx1 = texture(uHuTex, localToUvw(samplePos + vec3(gradStep.x, 0.0, 0.0))).r;
         float hx2 = texture(uHuTex, localToUvw(samplePos - vec3(gradStep.x, 0.0, 0.0))).r;
         float hy1 = texture(uHuTex, localToUvw(samplePos + vec3(0.0, gradStep.y, 0.0))).r;
@@ -631,8 +676,17 @@ void main(){
         float diffuse = max(dot(normal, uLightDir), 0.0);
         color *= (0.55 + 0.55 * diffuse);
 
-        accumColor += (1.0 - accumAlpha) * alpha * color;
-        accumAlpha += (1.0 - accumAlpha) * alpha;
+        // Beer-Lambert: physically correct and step-size-invariant --
+        // opacity/visibility multipliers are folded into totalCoeff
+        // *before* this exponential (not multiplied onto stepAlpha
+        // afterward), which matters: doing it after breaks true
+        // invariance and stops the opacity slider from actually capping
+        // a thick structure's max opacity, since repeated compositing
+        // still saturates accumAlpha to 1 regardless of a post-hoc
+        // multiplier.
+        float stepAlpha = 1.0 - exp(-totalCoeff * stepSize);
+        accumColor += (1.0 - accumAlpha) * stepAlpha * color;
+        accumAlpha += (1.0 - accumAlpha) * stepAlpha;
       }
     }
 
@@ -661,13 +715,21 @@ scene.add(volumeMesh);
 
 document.getElementById('loading').style.display = 'none';
 
+// Interaction LOD: sampling finely (uTargetStep=0.35mm) is the whole
+// point while the view is still, but not worth paying for every frame
+// while the camera is actively moving, when full resolution is least
+// perceptible anyway. Raise the target step (coarser, faster) for the
+// duration of an OrbitControls drag, restore it on release.
+controls.addEventListener('start', () => { uniforms.uTargetStep.value = 1.0; });
+controls.addEventListener('end', () => { uniforms.uTargetStep.value = 0.35; });
+
 // ---------------------------------------------------------------------
 // Per-structure toggle + opacity controls -- drive shader uniforms
 // directly instead of per-object material/visibility state.
 // ---------------------------------------------------------------------
-const STRUCTURES = ['bone', 'tooth', 'metal', 'soft_tissue'];
-const UNIFORM_KEY = { bone:'Bone', tooth:'Tooth', metal:'Metal', soft_tissue:'Soft' };
-const visibleState = { bone:true, tooth:true, metal:true, soft_tissue:false };
+const STRUCTURES = ['bone', 'metal', 'soft_tissue'];
+const UNIFORM_KEY = { bone:'Bone', metal:'Metal', soft_tissue:'Soft' };
+const visibleState = { bone:true, metal:true, soft_tissue:false };
 
 STRUCTURES.forEach(name => {
   const toggle = document.getElementById('toggle-' + name);
@@ -693,15 +755,21 @@ STRUCTURES.forEach(name => {
 // Click-to-identify + point-to-point / angle measurement.
 //
 // There's no explicit surface to raycast against (that's the whole point
-// of volume rendering), so this walks the *label* array directly in JS --
-// the same array driving the shader's classification, just read from the
-// CPU side -- stepping along the click ray until it finds the first voxel
-// belonging to a currently-visible structure. Segmentation only produces
-// class-level labels, so identify reports the real classified structure,
-// not a guessed anatomical name like "maxilla".
+// of volume rendering), so this walks the HU and label arrays directly in
+// JS -- the same data driving the shader, just read from the CPU side --
+// stepping along the click ray until it finds the first voxel belonging
+// to a currently-visible structure. pickAtLocal() below mirrors the
+// shader's exact priority chain (metal label -> bone density threshold ->
+// soft-tissue label) so a click always agrees with what's actually
+// rendered on screen -- bone is no longer a label lookup, so picking it
+// by exact label match would silently disagree with the shader the
+// moment a dense-but-unlabeled voxel renders as bone but isn't picked as
+// one. Segmentation only produces class-level labels, so identify reports
+// the real classified structure, not a guessed anatomical name like
+// "maxilla".
 // ---------------------------------------------------------------------
-const STRUCTURE_LABEL = { bone:'Bone', tooth:'Tooth', metal:'Metal hardware', soft_tissue:'Soft tissue' };
-const LABEL_ID = { bone:3, tooth:4, metal:5, soft_tissue:2 };
+const STRUCTURE_LABEL = { bone:'Bone', metal:'Metal hardware', soft_tissue:'Soft tissue' };
+const LABEL_ID = { metal:5, soft_tissue:2 };
 
 function labelAtLocal(p){
   const u = 0.5 - p.x / sizeX;
@@ -712,6 +780,28 @@ function labelAtLocal(p){
   const row = Math.min(nrows - 1, Math.floor(v * nrows));
   const slice = Math.min(nslices - 1, Math.floor(w * nslices));
   return labelData[slice * nrows * ncols + row * ncols + col];
+}
+
+function huAtLocal(p){
+  const u = 0.5 - p.x / sizeX;
+  const v = 0.5 - p.z / sizeZ;
+  const w = 0.5 + p.y / sizeY;
+  if(u < 0 || u > 1 || v < 0 || v > 1 || w < 0 || w > 1) return null;
+  const col = Math.min(ncols - 1, Math.floor(u * ncols));
+  const row = Math.min(nrows - 1, Math.floor(v * nrows));
+  const slice = Math.min(nslices - 1, Math.floor(w * nslices));
+  const raw = huData[slice * nrows * ncols + row * ncols + col];
+  return meta.windowMinHu + (raw / 255) * (meta.windowMaxHu - meta.windowMinHu);
+}
+
+function pickAtLocal(p){
+  const lab = labelAtLocal(p);
+  if(lab < 0) return null;
+  if(lab === LABEL_ID.metal) return visibleState.metal ? 'metal' : null;
+  const hu = huAtLocal(p);
+  if(hu !== null && hu >= boneFloorHU) return visibleState.bone ? 'bone' : null;
+  if(lab === LABEL_ID.soft_tissue) return visibleState.soft_tissue ? 'soft_tissue' : null;
+  return null;
 }
 
 function raycastVolume(origin, dir){
@@ -731,9 +821,8 @@ function raycastVolume(origin, dir){
   const pos = origin.clone().addScaledVector(dir, tNear);
   const stepVec = dir.clone().multiplyScalar(stepSize);
   for(let i = 0; i < steps; i++){
-    const lab = labelAtLocal(pos);
-    const name = STRUCTURES.find(n => LABEL_ID[n] === lab);
-    if(name && visibleState[name]) return { point: pos.clone(), structure: name };
+    const structure = pickAtLocal(pos);
+    if(structure) return { point: pos.clone(), structure };
     pos.add(stepVec);
   }
   return null;
