@@ -30,7 +30,6 @@
     height:100vh;
   }
 
-  /* Header */
   header{
     display:flex;
     align-items:center;
@@ -66,16 +65,15 @@
     line-height:1.5;
   }
 
-  /* Layout */
   .layout{flex:1; display:flex; min-height:0;}
 
-  /* Sidebar */
   nav{
     width:230px;
     flex-shrink:0;
     background:var(--panel);
     border-right:1px solid var(--panel-line);
     overflow-y:auto;
+    overflow-x:hidden;
     padding:16px 0;
   }
   .nav-group-label{
@@ -116,7 +114,34 @@
     margin-top:2px;
   }
 
-  /* Viewer */
+  .control-group{padding:14px 18px; border-top:1px solid var(--panel-line);}
+  .control-group label{
+    font-family:var(--mono); font-size:10px; color:var(--text-dim);
+    letter-spacing:0.12em; text-transform:uppercase; display:block; margin-bottom:10px;
+  }
+  .slider-row{display:flex; align-items:center; gap:8px; margin-top:8px;}
+  .slider-row:first-of-type{margin-top:0;}
+  .val-label{font-size:12px; color:var(--text); width:44px; flex-shrink:0;}
+  input[type=range]{
+    flex:1; min-width:0; -webkit-appearance:none; height:3px;
+    background:var(--panel-line); border-radius:2px; outline:none;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:13px; height:13px; border-radius:50%;
+    background:var(--amber); cursor:pointer; box-shadow:0 0 8px rgba(255,180,84,0.5);
+  }
+  input[type=range]::-moz-range-thumb{
+    width:13px; height:13px; border-radius:50%; background:var(--amber); border:none; cursor:pointer;
+  }
+  .val{font-family:var(--mono); font-size:11px; color:var(--text-dim); width:44px; text-align:right; flex-shrink:0;}
+  .reset-btn{
+    margin-top:10px; width:100%;
+    background:#1a1c1d; border:1px solid var(--panel-line); color:var(--text-dim);
+    font-family:var(--mono); font-size:11px; letter-spacing:0.06em;
+    padding:7px; border-radius:3px; cursor:pointer; transition:all 0.12s;
+  }
+  .reset-btn:hover{color:var(--amber); border-color:var(--amber-dim);}
+
   main{
     flex:1;
     display:flex;
@@ -126,9 +151,6 @@
   }
   .stage{
     flex:1;
-    display:flex;
-    align-items:center;
-    justify-content:center;
     position:relative;
     background:
       radial-gradient(ellipse at center, #141516 0%, #0a0b0c 75%);
@@ -137,13 +159,9 @@
     user-select:none;
   }
   .stage.dragging{cursor:grabbing;}
-  .stage img{
-    max-height:92%;
-    max-width:92%;
-    object-fit:contain;
+  .stage canvas{
+    position:absolute; top:0; left:0;
     filter:drop-shadow(0 0 30px rgba(0,0,0,0.6));
-    pointer-events:none;
-    -webkit-user-drag:none;
   }
   .stage .hint{
     position:absolute;
@@ -159,8 +177,9 @@
     gap:8px;
     opacity:0.85;
     pointer-events:none;
+    text-align:center;
   }
-  .stage .hint .dot{width:4px;height:4px;background:var(--amber);border-radius:50%;}
+  .stage .hint .dot{width:4px;height:4px;background:var(--amber);border-radius:50%;flex-shrink:0;}
 
   .frame-index{
     position:absolute;
@@ -170,8 +189,11 @@
     font-size:12px;
     color:var(--amber);
     letter-spacing:0.04em;
+    text-align:right;
+    line-height:1.6;
   }
   .frame-index .of{color:var(--text-dim);}
+  .frame-index .pos{display:block; font-size:10.5px; color:var(--text-dim);}
 
   .series-label{
     position:absolute;
@@ -181,6 +203,19 @@
     font-size:12px;
     color:var(--text-dim);
     letter-spacing:0.04em;
+  }
+
+  .zoom-readout{
+    position:absolute;
+    bottom:16px;
+    right:20px;
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--text-dim);
+    letter-spacing:0.04em;
+    background:rgba(19,21,22,0.7);
+    padding:3px 8px;
+    border-radius:3px;
   }
 
   /* Scrub bar */
@@ -209,29 +244,7 @@
     justify-content:center;
   }
   .scrub button:hover{border-color:var(--amber-dim); color:var(--amber);}
-  input[type=range]{
-    flex:1;
-    -webkit-appearance:none;
-    height:3px;
-    background:var(--panel-line);
-    border-radius:2px;
-    outline:none;
-  }
-  input[type=range]::-webkit-slider-thumb{
-    -webkit-appearance:none;
-    width:14px; height:14px;
-    border-radius:50%;
-    background:var(--amber);
-    cursor:pointer;
-    box-shadow:0 0 8px rgba(255,180,84,0.5);
-  }
-  input[type=range]::-moz-range-thumb{
-    width:14px; height:14px;
-    border-radius:50%;
-    background:var(--amber);
-    border:none;
-    cursor:pointer;
-  }
+  .scrub input[type=range]{flex:1; min-width:0;}
 
   ::-webkit-scrollbar{width:8px;}
   ::-webkit-scrollbar-track{background:var(--panel);}
@@ -260,7 +273,7 @@
     .layout{position:relative; overflow:hidden;}
     nav{
       position:fixed; left:0; right:0; bottom:0; top:auto;
-      width:auto; max-height:70vh;
+      width:auto; max-height:75vh;
       border-right:none; border-top:1px solid var(--panel-line);
       border-radius:14px 14px 0 0;
       transform:translateY(100%);
@@ -297,13 +310,30 @@
 
 <div class="nav-backdrop" id="navBackdrop"></div>
 <div class="layout">
-  <nav id="nav"></nav>
+  <nav id="nav">
+    <div id="seriesList"></div>
+    <div class="control-group" id="windowLevelGroup">
+      <label>Window / Level</label>
+      <div class="slider-row">
+        <span class="val-label">Center</span>
+        <input type="range" id="wcSlider" min="-1000" max="4000" value="40">
+        <span class="val" id="wcVal">40</span>
+      </div>
+      <div class="slider-row">
+        <span class="val-label">Width</span>
+        <input type="range" id="wwSlider" min="1" max="4000" value="400">
+        <span class="val" id="wwVal">400</span>
+      </div>
+      <button class="reset-btn" id="resetBtn">Reset view</button>
+    </div>
+  </nav>
   <main>
-    <div class="series-label" id="seriesLabel"></div>
-    <div class="frame-index" id="frameIndex"></div>
     <div class="stage" id="stage">
-      <img id="mainImg" src="" alt="CT slice">
-      <div class="hint" id="hint"><span class="dot"></span><span id="hintText">Drag left / right to scrub</span></div>
+      <canvas id="stageCanvas"></canvas>
+      <div class="series-label" id="seriesLabel"></div>
+      <div class="frame-index" id="frameIndex"></div>
+      <div class="zoom-readout" id="zoomReadout">100%</div>
+      <div class="hint" id="hint"><span class="dot"></span><span id="hintText">Drag to scrub · wheel to zoom · shift-drag to pan</span></div>
     </div>
     <div class="scrub">
       <button id="prevBtn">‹</button>
@@ -313,57 +343,209 @@
   </main>
 </div>
 
+<script src="gallery-manifest.js"></script>
 <script>
-const manifest = [{"key": "axial_1mm_a", "label": "Axial (1.0mm)", "count": 196}, {"key": "axial_1mm_b", "label": "Axial (1.0mm) \u2014 alt window", "count": 196}, {"key": "axial_1_5mm", "label": "Axial (1.5mm)", "count": 131}, {"key": "axial_1_5mm_b", "label": "Axial (1.5mm) \u2014 alt window", "count": 131}, {"key": "coronal_a", "label": "Coronal", "count": 113}, {"key": "coronal_b", "label": "Coronal \u2014 alt window", "count": 113}, {"key": "sagittal_a", "label": "Sagittal", "count": 138}, {"key": "sagittal_b", "label": "Sagittal \u2014 alt window", "count": 138}, {"key": "recon3d_rotation_A", "label": "3D Rotation \u2014 Bone", "count": 20}, {"key": "recon3d_rotation_B", "label": "3D Rotation \u2014 Segmented", "count": 38}, {"key": "panoramic_xray", "label": "Panoramic X-ray", "count": 1}];
+// GALLERY_MANIFEST (from gallery-manifest.js) covers the real cross-section
+// series with raw HU data. recon3d rotation renders are the scanner's own
+// pre-rendered flat-image sequences -- not real per-voxel HU data, so they
+// stay on a simple decoded-image draw path with no window/level.
+const FLAT_SERIES = [
+  { key: "recon3d_rotation_A", label: "3D Rotation — Bone", count: 20, flat: true },
+  { key: "recon3d_rotation_B", label: "3D Rotation — Segmented", count: 38, flat: true },
+];
 
-let current = manifest[0];
-let frame = 1;
+const rawByKey = {};
+GALLERY_MANIFEST.forEach(s => rawByKey[s.key] = Object.assign({flat:false}, s));
+const flatByKey = {};
+FLAT_SERIES.forEach(s => flatByKey[s.key] = s);
 
-const nav = document.getElementById('nav');
-const groups = {
-  "Cross-sections": ["axial_1mm_a","axial_1mm_b","axial_1_5mm","axial_1_5mm_b","coronal_a","coronal_b","sagittal_a","sagittal_b"],
-  "3D Renders": ["recon3d_rotation_A","recon3d_rotation_B"],
-  "Dental": ["panoramic_xray"]
+const manifestLabels = {
+  axial_1mm_a: "Axial (1.0mm)", axial_1mm_b: "Axial (1.0mm) — sharp kernel",
+  axial_1_5mm_a: "Axial (1.5mm)", axial_1_5mm_b: "Axial (1.5mm) — sharp kernel",
+  coronal_a: "Coronal", coronal_b: "Coronal — sharp kernel",
+  sagittal_a: "Sagittal", sagittal_b: "Sagittal — sharp kernel",
 };
 
+const groups = {
+  "Cross-sections": ["axial_1mm_a","axial_1mm_b","axial_1_5mm_a","axial_1_5mm_b","coronal_a","coronal_b","sagittal_a","sagittal_b"],
+  "3D Renders": ["recon3d_rotation_A","recon3d_rotation_B"],
+};
+
+let current = null;   // manifest entry (raw or flat) for the active series
+let frame = 1;
+let zoomLevel = 1;
+let fitZoom = 1;
+let panX = 0, panY = 0;
+let wc = 40, ww = 400;
+let pendingZoomReset = true;
+
+const rawCache = new Map(); // "key/frame" -> Int16Array
+const sourceCanvas = document.createElement('canvas');
+const sourceCtx = sourceCanvas.getContext('2d');
+const stageCanvas = document.getElementById('stageCanvas');
+const stageCtx = stageCanvas.getContext('2d');
+const stage = document.getElementById('stage');
+
+const seriesList = document.getElementById('seriesList');
 function buildNav(){
   Object.entries(groups).forEach(([groupName, keys])=>{
     const label = document.createElement('div');
     label.className = 'nav-group-label';
     label.textContent = groupName;
-    nav.appendChild(label);
+    seriesList.appendChild(label);
     keys.forEach(key=>{
-      const s = manifest.find(m=>m.key===key);
+      const s = rawByKey[key] || flatByKey[key];
       if(!s) return;
+      const displayLabel = manifestLabels[key] || s.label || key;
       const btn = document.createElement('button');
       btn.className = 'series-btn';
       btn.dataset.key = key;
-      btn.innerHTML = s.label + '<span class="count">' + s.count + ' images</span>';
-      btn.onclick = ()=> selectSeries(s);
-      nav.appendChild(btn);
+      btn.innerHTML = displayLabel + '<span class="count">' + s.count + ' images</span>';
+      btn.onclick = ()=> selectSeries(key);
+      seriesList.appendChild(btn);
     });
   });
 }
 
-function selectSeries(s){
-  current = s;
-  frame = Math.ceil(s.count/2);
-  document.querySelectorAll('.series-btn').forEach(b=>b.classList.toggle('active', b.dataset.key===s.key));
-  document.getElementById('slider').max = s.count;
-  document.getElementById('seriesLabel').textContent = s.label;
-  document.getElementById('hintText').textContent = s.key.startsWith('recon3d') ? 'Drag to rotate' : 'Drag or scroll to scrub slices';
-  render();
+function selectSeries(key){
+  current = rawByKey[key] || flatByKey[key];
+  current.key = key;
+  frame = Math.ceil(current.count/2);
+  document.querySelectorAll('.series-btn').forEach(b=>b.classList.toggle('active', b.dataset.key===key));
+  document.getElementById('slider').max = current.count;
+  document.getElementById('seriesLabel').textContent = manifestLabels[key] || current.label || key;
+  document.getElementById('hintText').textContent = current.flat ? 'Drag to rotate · wheel to zoom' : 'Drag to scrub · wheel to zoom · shift-drag to pan';
+  document.getElementById('windowLevelGroup').style.display = current.flat ? 'none' : 'block';
+
+  if(!current.flat){
+    wc = current.defaultWindowCenter;
+    ww = current.defaultWindowWidth;
+    const wcSlider = document.getElementById('wcSlider');
+    const wwSlider = document.getElementById('wwSlider');
+    wcSlider.min = Math.min(-1000, Math.round(wc - ww));
+    wcSlider.max = Math.max(4000, Math.round(wc + ww));
+    wwSlider.max = Math.max(4000, Math.round(ww * 2));
+    wcSlider.value = wc;
+    wwSlider.value = ww;
+    document.getElementById('wcVal').textContent = Math.round(wc);
+    document.getElementById('wwVal').textContent = Math.round(ww);
+  }
+
+  resetView();
+  loadFrame();
   if(window.innerWidth <= 820){
     document.getElementById('nav').classList.remove('open');
     document.getElementById('navBackdrop').classList.remove('open');
   }
 }
 
-function render(){
-  const idx = String(frame).padStart(4,'0');
-  document.getElementById('mainImg').src = `images/${current.key}/${idx}.jpg`;
+function computeFitZoom(w, h){
+  const availW = stage.clientWidth * 0.92;
+  const availH = stage.clientHeight * 0.92;
+  return Math.min(availW / w, availH / h, 4);
+}
+
+function resetView(){
+  if(!current.flat){
+    fitZoom = computeFitZoom(current.width, current.height);
+    zoomLevel = fitZoom;
+    pendingZoomReset = false;
+  } else {
+    // Flat images' native size isn't known until the frame's onload fires.
+    pendingZoomReset = true;
+  }
+  panX = 0; panY = 0;
+}
+
+async function loadFrame(){
+  if(current.flat){
+    const idx = String(frame).padStart(4,'0');
+    const img = new Image();
+    img.onload = ()=>{
+      if(pendingZoomReset){
+        fitZoom = computeFitZoom(img.width, img.height);
+        zoomLevel = fitZoom;
+        pendingZoomReset = false;
+      }
+      sourceCanvas.width = img.width;
+      sourceCanvas.height = img.height;
+      sourceCtx.drawImage(img, 0, 0);
+      drawStage(img.width, img.height);
+    };
+    img.src = `images/${current.key}/${idx}.jpg`;
+    updateReadouts();
+    return;
+  }
+
+  const cacheKey = current.key + '/' + frame;
+  let hu = rawCache.get(cacheKey);
+  if(!hu){
+    const idx = String(frame).padStart(4,'0');
+    const buf = await fetch(`images_raw/${current.key}/${idx}.raw`).then(r=>r.arrayBuffer());
+    hu = new Int16Array(buf);
+    rawCache.set(cacheKey, hu);
+  }
+  renderWindowed(hu);
+  updateReadouts();
+}
+
+function renderWindowed(hu){
+  const w = current.width, h = current.height;
+  sourceCanvas.width = w;
+  sourceCanvas.height = h;
+  const imgData = sourceCtx.createImageData(w, h);
+  const lo = wc - ww/2;
+  const scale = 255 / ww;
+  const out = imgData.data;
+  for(let i=0; i<hu.length; i++){
+    let v = (hu[i] - lo) * scale;
+    v = v < 0 ? 0 : (v > 255 ? 255 : v);
+    const o = i*4;
+    out[o] = out[o+1] = out[o+2] = v;
+    out[o+3] = 255;
+  }
+  sourceCtx.putImageData(imgData, 0, 0);
+  drawStage(w, h);
+}
+
+function drawStage(nativeW, nativeH){
+  const dpr = window.devicePixelRatio || 1;
+  const cw = stage.clientWidth, ch = stage.clientHeight;
+  stageCanvas.width = cw * dpr;
+  stageCanvas.height = ch * dpr;
+  stageCanvas.style.width = cw + 'px';
+  stageCanvas.style.height = ch + 'px';
+  stageCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  stageCtx.clearRect(0, 0, cw, ch);
+  stageCtx.imageSmoothingEnabled = zoomLevel < 2;
+  const dw = nativeW * zoomLevel;
+  const dh = nativeH * zoomLevel;
+  const dx = cw/2 - dw/2 + panX;
+  const dy = ch/2 - dh/2 + panY;
+  stageCtx.drawImage(sourceCanvas, dx, dy, dw, dh);
+}
+
+function redraw(){
+  if(!current) return;
+  const w = current.flat ? sourceCanvas.width : current.width;
+  const h = current.flat ? sourceCanvas.height : current.height;
+  if(w && h) drawStage(w, h);
+}
+
+function updateReadouts(){
+  document.getElementById('frameIndex').innerHTML =
+    frame + '<span class="of"> / ' + current.count + '</span>' +
+    (current.flat ? '' : '<span class="pos">' + formatPosition() + '</span>');
+  // zoom % is relative to native 1:1 resolution, not to the fit view
+  document.getElementById('zoomReadout').textContent = Math.round(zoomLevel*100) + '%';
   document.getElementById('slider').value = frame;
-  document.getElementById('frameIndex').innerHTML = frame + '<span class="of"> / ' + current.count + '</span>';
+}
+
+function formatPosition(){
+  const pos = current.positionsMm ? current.positionsMm[frame-1] : null;
+  if(pos === null || pos === undefined) return '';
+  const sign = pos >= 0 ? '+' : '';
+  return sign + pos.toFixed(1) + 'mm';
 }
 
 function clampFrame(){
@@ -373,62 +555,116 @@ function clampFrame(){
 
 document.getElementById('slider').addEventListener('input', e=>{
   frame = parseInt(e.target.value);
-  render();
+  loadFrame();
 });
-document.getElementById('prevBtn').onclick = ()=>{ frame--; clampFrame(); render(); };
-document.getElementById('nextBtn').onclick = ()=>{ frame++; clampFrame(); render(); };
+document.getElementById('prevBtn').onclick = ()=>{ frame--; clampFrame(); loadFrame(); };
+document.getElementById('nextBtn').onclick = ()=>{ frame++; clampFrame(); loadFrame(); };
 
-// Drag-to-scrub / drag-to-rotate
-const stage = document.getElementById('stage');
-let dragging = false, startX = 0, startFrame = 1;
+// Window/level sliders
+const wcSlider = document.getElementById('wcSlider');
+const wwSlider = document.getElementById('wwSlider');
+function onWindowChange(){
+  wc = parseFloat(wcSlider.value);
+  ww = Math.max(1, parseFloat(wwSlider.value));
+  document.getElementById('wcVal').textContent = Math.round(wc);
+  document.getElementById('wwVal').textContent = Math.round(ww);
+  const cacheKey = current.key + '/' + frame;
+  const hu = rawCache.get(cacheKey);
+  if(hu) renderWindowed(hu);
+}
+wcSlider.addEventListener('input', onWindowChange);
+wwSlider.addEventListener('input', onWindowChange);
+
+document.getElementById('resetBtn').onclick = ()=>{
+  if(!current.flat){
+    wc = current.defaultWindowCenter;
+    ww = current.defaultWindowWidth;
+    wcSlider.value = wc; wwSlider.value = ww;
+    document.getElementById('wcVal').textContent = Math.round(wc);
+    document.getElementById('wwVal').textContent = Math.round(ww);
+  }
+  resetView();
+  loadFrame();
+  updateReadouts();
+};
+
+// Drag: scrub by default, pan with shift held (or two-finger touch)
+let dragging = false, startX = 0, startY = 0, startFrame = 1, startPanX = 0, startPanY = 0, panMode = false;
 
 stage.addEventListener('mousedown', e=>{
-  dragging = true; startX = e.clientX; startFrame = frame;
+  dragging = true; startX = e.clientX; startY = e.clientY; startFrame = frame;
+  startPanX = panX; startPanY = panY;
+  panMode = e.shiftKey;
   stage.classList.add('dragging');
 });
 window.addEventListener('mousemove', e=>{
   if(!dragging) return;
-  const dx = e.clientX - startX;
-  const sensitivity = current.key.startsWith('recon3d') ? 8 : 5;
-  const delta = Math.round(dx / sensitivity);
-  frame = startFrame - delta;
-  clampFrame();
-  render();
+  if(panMode){
+    panX = startPanX + (e.clientX - startX);
+    panY = startPanY + (e.clientY - startY);
+    redraw();
+  } else {
+    const dx = e.clientX - startX;
+    const sensitivity = current.flat ? 8 : 5;
+    const delta = Math.round(dx / sensitivity);
+    frame = startFrame - delta;
+    clampFrame();
+    loadFrame();
+  }
 });
 window.addEventListener('mouseup', ()=>{ dragging=false; stage.classList.remove('dragging'); });
 
-// Touch support
 stage.addEventListener('touchstart', e=>{
-  dragging = true; startX = e.touches[0].clientX; startFrame = frame;
+  dragging = true;
+  startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+  startFrame = frame; startPanX = panX; startPanY = panY;
+  panMode = e.touches.length > 1;
 }, {passive:true});
 stage.addEventListener('touchmove', e=>{
   if(!dragging) return;
-  const dx = e.touches[0].clientX - startX;
-  const sensitivity = current.key.startsWith('recon3d') ? 8 : 5;
-  const delta = Math.round(dx / sensitivity);
-  frame = startFrame - delta;
-  clampFrame();
-  render();
+  if(panMode){
+    panX = startPanX + (e.touches[0].clientX - startX);
+    panY = startPanY + (e.touches[0].clientY - startY);
+    redraw();
+  } else {
+    const dx = e.touches[0].clientX - startX;
+    const sensitivity = current.flat ? 8 : 5;
+    const delta = Math.round(dx / sensitivity);
+    frame = startFrame - delta;
+    clampFrame();
+    loadFrame();
+  }
 }, {passive:true});
 stage.addEventListener('touchend', ()=>{ dragging=false; });
 
-// Scroll wheel to scrub
+// Wheel = zoom, centered on cursor
 stage.addEventListener('wheel', e=>{
   e.preventDefault();
-  frame += e.deltaY > 0 ? 1 : -1;
-  clampFrame();
-  render();
+  const rect = stage.getBoundingClientRect();
+  const cx = e.clientX - rect.left - stage.clientWidth/2;
+  const cy = e.clientY - rect.top - stage.clientHeight/2;
+  const factor = Math.pow(1.0015, -e.deltaY);
+  const newZoom = Math.min(Math.max(zoomLevel * factor, fitZoom * 0.2), 16);
+  // keep the point under the cursor stable while zooming
+  const ratio = newZoom / zoomLevel;
+  panX = cx - (cx - panX) * ratio;
+  panY = cy - (cy - panY) * ratio;
+  zoomLevel = newZoom;
+  redraw();
+  updateReadouts();
 }, {passive:false});
 
 // Keyboard
 window.addEventListener('keydown', e=>{
-  if(e.key === 'ArrowRight'){ frame++; clampFrame(); render(); }
-  if(e.key === 'ArrowLeft'){ frame--; clampFrame(); render(); }
+  if(e.key === 'ArrowRight'){ frame++; clampFrame(); loadFrame(); }
+  if(e.key === 'ArrowLeft'){ frame--; clampFrame(); loadFrame(); }
 });
 
+window.addEventListener('resize', ()=>{ redraw(); });
+
 buildNav();
-selectSeries(manifest[0]);
-document.querySelector('.series-btn').classList.add('active');
+const firstKey = groups["Cross-sections"][0];
+selectSeries(firstKey);
 
 const navToggle = document.getElementById('navToggle');
 const navEl = document.getElementById('nav');
