@@ -107,6 +107,17 @@
   .legend{display:flex; flex-direction:column; gap:8px;}
   .legend-row{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-dim);}
   .legend-swatch{width:22px; height:10px; border-radius:2px; flex-shrink:0; display:inline-block;}
+  .legend-bar{
+    height:12px; border-radius:2px;
+    background:linear-gradient(90deg, #8a4a1e 0%, #d8a54a 9.2%, #f0e6d2 26.3%, #ffffff 41%, #d8c8ff 100%);
+  }
+  .legend-ticks{
+    display:flex; justify-content:space-between;
+    font-family:var(--mono); font-size:9.5px; color:var(--text-dim); margin-top:3px;
+  }
+  .legend-note{
+    font-size:10.5px; color:var(--text-dim); line-height:1.5; margin-top:8px;
+  }
   .val-label{font-size:12px; color:var(--text); width:56px; flex-shrink:0;}
 
   main{flex:1; position:relative; min-width:0;}
@@ -218,10 +229,18 @@
     </div>
 
     <div class="control-group">
-      <label>Colored by density</label>
+      <label>Colored by density (HU)</label>
       <div class="legend">
-        <div class="legend-row"><span class="legend-swatch" style="background:linear-gradient(90deg,#e6d796,#faf5e8)"></span>low → high density bone</div>
-        <div class="legend-row"><span class="legend-swatch" style="background:#5ad2ff"></span>very dense (metal/heavy calcification)</div>
+        <div class="legend-bar"></div>
+        <div class="legend-ticks">
+          <span>~300</span><span>~900</span><span>~1700</span><span>~2400+</span>
+        </div>
+        <div class="legend-row" style="margin-top:6px;">
+          <span class="legend-swatch" style="background:#bfc1c7"></span>≥5500 HU — likely metal hardware
+        </div>
+        <div class="legend-note">
+          Tooth enamel is among the densest tissue in the body and can approach metal-range density — expect some color overlap between teeth and very dense bone, that's the real scan data, not a coloring error.
+        </div>
       </div>
     </div>
 
