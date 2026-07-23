@@ -288,6 +288,40 @@
       </div>
     </div>
 
+    <div class="control-group">
+      <label>Tools</label>
+      <div class="layer-btns">
+        <div class="layer-btn active" id="mode-rotate">Rotate / pan</div>
+        <div class="layer-btn" id="mode-identify">Identify (click)</div>
+        <div class="layer-btn" id="mode-distance">Measure distance</div>
+        <div class="layer-btn" id="mode-angle">Measure angle</div>
+      </div>
+      <div id="toolResult" class="legend-note" style="margin-top:10px; min-height:14px;">Click a point on the model to use the selected tool.</div>
+      <div class="layer-btn" id="clearMeasure" style="margin-top:8px; justify-content:center;">Clear markers</div>
+    </div>
+
+    <div class="control-group">
+      <label>Clipping plane</label>
+      <div class="toggle-row">
+        <span class="toggle-label">Enabled</span>
+        <div class="switch" id="clipToggle"><div class="knob"></div></div>
+      </div>
+      <div class="layer-btns" style="margin-top:10px;">
+        <div class="layer-btn active" id="clip-axial">Axial</div>
+        <div class="layer-btn" id="clip-coronal">Coronal</div>
+        <div class="layer-btn" id="clip-sagittal">Sagittal</div>
+      </div>
+      <div class="slider-row" style="margin-top:10px;">
+        <span class="val-label">Position</span>
+        <input type="range" id="clipSlider" min="-100" max="100" value="0">
+        <span class="val" id="clipVal">0%</span>
+      </div>
+      <div class="toggle-row" style="margin-top:8px;">
+        <span class="toggle-label">Flip side</span>
+        <div class="switch" id="clipFlip"><div class="knob"></div></div>
+      </div>
+    </div>
+
     <div class="hint-block">
       <div><span class="k">drag</span> — rotate</div>
       <div><span class="k">scroll</span> — zoom</div>
@@ -431,6 +465,7 @@ function checkLoaded(){
       if(group) group.position.sub(modelCenter);
     });
     document.getElementById('loading').style.display = 'none';
+    applyClippingToMaterials(); // in case clipping was toggled on before every structure finished loading
   }
 }
 
@@ -531,6 +566,214 @@ STRUCTURES.forEach(name => {
     valEl.textContent = slider.value + '%';
   });
 });
+
+// ---------------------------------------------------------------------
+// Click-to-identify + point-to-point / angle measurement.
+//
+// Segmentation only produces class-level labels (bone / tooth / metal /
+// soft tissue) -- there's no sub-anatomical atlas behind this, so
+// identify reports the real classified structure, not a guessed
+// anatomical name like "maxilla". Position is reported in mm relative to
+// the volume's own center (the same rigid coordinate frame the meshes
+// already share), not a clinical landmark.
+// ---------------------------------------------------------------------
+const STRUCTURE_LABEL = { bone:'Bone', tooth:'Tooth', metal:'Metal hardware', soft_tissue:'Soft tissue' };
+
+let toolMode = 'rotate'; // 'rotate' | 'identify' | 'distance' | 'angle'
+const modeButtons = {
+  rotate: document.getElementById('mode-rotate'),
+  identify: document.getElementById('mode-identify'),
+  distance: document.getElementById('mode-distance'),
+  angle: document.getElementById('mode-angle'),
+};
+const toolResult = document.getElementById('toolResult');
+const MODE_HINT = {
+  rotate: 'Click a point on the model to use the selected tool.',
+  identify: 'Click a structure to identify it.',
+  distance: 'Click two points to measure distance.',
+  angle: 'Click three points: two ends, then the vertex.',
+};
+
+function setToolMode(mode){
+  toolMode = mode;
+  Object.entries(modeButtons).forEach(([k, btn]) => btn.classList.toggle('active', k === mode));
+  clearMarkers();
+  toolResult.textContent = MODE_HINT[mode];
+}
+Object.entries(modeButtons).forEach(([k, btn]) => btn.onclick = () => setToolMode(k));
+
+// Measurement/identify visuals live in their own group so clearMarkers()
+// can wipe them without touching the anatomy meshes.
+const markerGroup = new THREE.Group();
+scene.add(markerGroup);
+let measurePoints = []; // THREE.Vector3[] in world (already-centered) space
+
+function clearMarkers(){
+  measurePoints = [];
+  while(markerGroup.children.length){
+    const obj = markerGroup.children.pop();
+    obj.geometry && obj.geometry.dispose();
+    obj.material && obj.material.dispose();
+  }
+}
+document.getElementById('clearMeasure').onclick = () => {
+  clearMarkers();
+  toolResult.textContent = MODE_HINT[toolMode];
+};
+
+function addMarkerSphere(pos){
+  const geo = new THREE.SphereGeometry(Math.max(sceneScale * 0.006, 0.5), 12, 12);
+  const mat = new THREE.MeshBasicMaterial({ color:0xffb454, depthTest:false });
+  const sphere = new THREE.Mesh(geo, mat);
+  sphere.position.copy(pos);
+  sphere.renderOrder = 999;
+  markerGroup.add(sphere);
+}
+
+function addMarkerLine(a, b){
+  const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
+  const mat = new THREE.LineBasicMaterial({ color:0xffb454, depthTest:false });
+  const line = new THREE.Line(geo, mat);
+  line.renderOrder = 999;
+  markerGroup.add(line);
+}
+
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
+
+function visibleStructureMeshes(){
+  return STRUCTURES
+    .filter(n => structureGroup[n] && structureGroup[n].visible)
+    .map(n => structureMesh[n])
+    .filter(Boolean);
+}
+
+function angleAtVertex(a, b, c){
+  const v1 = new THREE.Vector3().subVectors(a, b).normalize();
+  const v2 = new THREE.Vector3().subVectors(c, b).normalize();
+  return THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(v1.dot(v2), -1, 1)));
+}
+
+function handleToolClick(clientX, clientY){
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+  const hits = raycaster.intersectObjects(visibleStructureMeshes(), false);
+  if(hits.length === 0) return;
+  const hit = hits[0];
+
+  if(toolMode === 'identify'){
+    clearMarkers();
+    addMarkerSphere(hit.point);
+    const name = STRUCTURES.find(n => structureMesh[n] === hit.object);
+    const p = hit.point;
+    toolResult.innerHTML = `<b style="color:var(--amber)">${STRUCTURE_LABEL[name] || 'unknown'}</b><br>`
+      + `position (mm from volume center): ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`;
+    return;
+  }
+
+  if(toolMode === 'distance'){
+    if(measurePoints.length >= 2) clearMarkers();
+    measurePoints.push(hit.point.clone());
+    addMarkerSphere(hit.point);
+    if(measurePoints.length === 2){
+      addMarkerLine(measurePoints[0], measurePoints[1]);
+      const d = measurePoints[0].distanceTo(measurePoints[1]);
+      toolResult.innerHTML = `distance: <b style="color:var(--amber)">${d.toFixed(1)} mm</b>`;
+    } else {
+      toolResult.textContent = 'Click a second point.';
+    }
+    return;
+  }
+
+  if(toolMode === 'angle'){
+    if(measurePoints.length >= 3) clearMarkers();
+    measurePoints.push(hit.point.clone());
+    addMarkerSphere(hit.point);
+    if(measurePoints.length >= 2){
+      addMarkerLine(measurePoints[measurePoints.length - 2], measurePoints[measurePoints.length - 1]);
+    }
+    if(measurePoints.length === 3){
+      const deg = angleAtVertex(measurePoints[0], measurePoints[1], measurePoints[2]);
+      toolResult.innerHTML = `angle at point 2: <b style="color:var(--amber)">${deg.toFixed(1)}°</b>`;
+    } else {
+      toolResult.textContent = measurePoints.length === 1 ? 'Click the vertex point (point 2).' : 'Click the third point.';
+    }
+    return;
+  }
+}
+
+// Distinguish a real click from a drag-to-rotate: OrbitControls handles the
+// drag itself (this listener never calls preventDefault/stopPropagation),
+// this just checks how far the pointer moved between down and up.
+let pointerDownAt = null;
+renderer.domElement.addEventListener('pointerdown', e => { pointerDownAt = { x:e.clientX, y:e.clientY }; });
+renderer.domElement.addEventListener('pointerup', e => {
+  const start = pointerDownAt;
+  pointerDownAt = null;
+  if(toolMode === 'rotate' || !start) return;
+  if(Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4) return; // was a drag, not a click
+  handleToolClick(e.clientX, e.clientY);
+});
+
+// ---------------------------------------------------------------------
+// Cross-sectional clipping -- one active plane; orientation, position,
+// and side are all adjustable. Applied per-material (three.js reads
+// material.clippingPlanes, there's no single renderer-wide list) so it
+// automatically covers every structure, including ones still loading
+// (see the applyClippingToMaterials() call added to checkLoaded() above).
+// ---------------------------------------------------------------------
+renderer.localClippingEnabled = true;
+const clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+let clipEnabled = false;
+let clipAxis = 'axial';
+let clipFlipped = false;
+
+const CLIP_AXIS_NORMAL = {
+  axial:    new THREE.Vector3(0, 1, 0),  // display Y = Superior
+  coronal:  new THREE.Vector3(0, 0, 1),  // display Z = -Posterior (anterior-facing)
+  sagittal: new THREE.Vector3(1, 0, 0),  // display X = -Left (right-facing)
+};
+
+function applyClippingToMaterials(){
+  const planes = clipEnabled ? [clipPlane] : [];
+  STRUCTURES.forEach(name => {
+    const mesh = structureMesh[name];
+    if(mesh) mesh.material.clippingPlanes = planes;
+  });
+}
+
+function updateClipPlane(){
+  const normal = CLIP_AXIS_NORMAL[clipAxis].clone();
+  if(clipFlipped) normal.negate();
+  const posFrac = document.getElementById('clipSlider').value / 100; // -1..1
+  clipPlane.normal.copy(normal);
+  clipPlane.constant = -posFrac * (sceneScale * 0.6); // slider spans +-60% of model scale, centered at origin
+}
+
+document.getElementById('clipToggle').onclick = function(){
+  clipEnabled = !clipEnabled;
+  this.classList.toggle('on', clipEnabled);
+  applyClippingToMaterials();
+};
+document.getElementById('clipFlip').onclick = function(){
+  clipFlipped = !clipFlipped;
+  this.classList.toggle('on', clipFlipped);
+  updateClipPlane();
+};
+['axial', 'coronal', 'sagittal'].forEach(axis => {
+  document.getElementById('clip-' + axis).onclick = function(){
+    clipAxis = axis;
+    ['axial', 'coronal', 'sagittal'].forEach(a => document.getElementById('clip-' + a).classList.toggle('active', a === axis));
+    updateClipPlane();
+  };
+});
+document.getElementById('clipSlider').addEventListener('input', function(){
+  document.getElementById('clipVal').textContent = this.value + '%';
+  updateClipPlane();
+});
+updateClipPlane();
 
 // Resize handling
 window.addEventListener('resize', ()=>{
