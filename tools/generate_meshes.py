@@ -226,10 +226,9 @@ def decimate(mesh, target_faces):
 # Density-based vertex coloring
 # ---------------------------------------------------------------------------
 
-def _sample_hu_at_points(sample_points_mm, vol):
-    """Convert display-space mm points back to (slice_idx, row_idx, col_idx)
-    and sample the HU volume there. Inverts the transform used in
-    volume_to_display_mesh."""
+def _display_to_index(sample_points_mm, vol):
+    """Convert display-space mm points back to (slice_idx, row_idx, col_idx).
+    Inverts the transform used in volume_to_display_mesh."""
     origin = vol["origin"]
     row_cosine = vol["row_cosine"]
     col_cosine = vol["col_cosine"]
@@ -248,27 +247,25 @@ def _sample_hu_at_points(sample_points_mm, vol):
     col_idx = coeffs[:, 0] / vol["col_spacing"]
     row_idx = coeffs[:, 1] / vol["row_spacing"]
     slice_idx = coeffs[:, 2] / vol["slice_thickness"]
+    return slice_idx, row_idx, col_idx
 
+
+def _sample_hu_at_points(sample_points_mm, vol):
+    slice_idx, row_idx, col_idx = _display_to_index(sample_points_mm, vol)
     coords = np.stack([slice_idx, row_idx, col_idx], axis=0)
     return ndimage.map_coordinates(
         vol["hu"].astype(np.float32), coords, order=1, mode="nearest"
     )
 
 
-def sample_hu_along_normals(mesh_raw, vol, offset_mm=1.5):
-    """Sample HU ~offset_mm inward along the raw (undecimated) marching-cubes
-    normals -- these are reliable pre-decimation, unlike normals recomputed
-    after trimesh decimation.
-
-    Which way "inward" points isn't safe to assume: it depends on marching
-    cubes' winding convention for this specific volume, which empirically
-    was NOT consistent between the sharp- and soft-kernel reconstructions of
-    the same scan (one needed +offset, the other -offset, despite identical
+def resolve_normal_sign(mesh_raw, vol, offset_mm=1.5):
+    """Which way "inward" points isn't safe to assume: it depends on marching
+    cubes' winding convention for this specific volume, which empirically was
+    NOT consistent between the sharp- and soft-kernel reconstructions of the
+    same scan (one needed +offset, the other -offset, despite identical
     coordinate transforms) -- so both directions are tried on a subsample and
-    whichever moves toward higher density (the correct direction for any
-    outside-low/inside-high isosurface, which is every threshold used here)
-    is picked automatically.
-    """
+    whichever moves toward higher density (correct for any outside-low/
+    inside-high isosurface, which is every threshold used here) is picked."""
     normals = mesh_raw.vertex_normals
     rng = np.random.default_rng(0)
     probe_idx = rng.choice(len(mesh_raw.vertices), size=min(3000, len(mesh_raw.vertices)), replace=False)
@@ -280,14 +277,48 @@ def sample_hu_along_normals(mesh_raw, vol, offset_mm=1.5):
     sign = -1.0 if med_neg > med_pos else 1.0
     print(f"    normal-direction probe: -normal*offset median={med_pos:.0f}, "
           f"+normal*offset median={med_neg:.0f} -> using sign={sign:+.0f}")
+    return sign
 
+
+def sample_hu_along_normals(mesh_raw, vol, offset_mm, sign):
+    """Sample HU ~offset_mm inward along the raw (undecimated) marching-cubes
+    normals -- these are reliable pre-decimation, unlike normals recomputed
+    after trimesh decimation."""
+    normals = mesh_raw.vertex_normals
     sample_points_mm = mesh_raw.vertices - normals * (offset_mm * sign)
     return _sample_hu_at_points(sample_points_mm, vol)
 
 
-def transfer_to_decimated(raw_mesh, raw_values, decimated_mesh):
+def sample_hu_max_multi_offset(mesh_raw, vol, sign, offsets_mm):
+    """Sample at several inward offsets and take the max at each vertex.
+    A single fixed offset can miss thin dense structures entirely -- if a
+    plate is thinner than the offset distance, sampling straight through it
+    lands past it in ordinary bone on the other side. Taking the max across
+    a few offsets makes detection robust to not knowing the structure's
+    thickness in advance."""
+    best = None
+    for off in offsets_mm:
+        vals = sample_hu_along_normals(mesh_raw, vol, off, sign)
+        best = vals if best is None else np.maximum(best, vals)
+    return best
+
+
+def sample_index_at_surface(mesh_raw, vol):
+    """Volume-index coordinates (slice, row, col) of each vertex's own
+    position (no inward offset) -- for testing membership in a spatially
+    confirmed region, independent of density."""
+    slice_idx, row_idx, col_idx = _display_to_index(mesh_raw.vertices, vol)
+    return np.stack([slice_idx, row_idx, col_idx], axis=1)
+
+
+def nearest_raw_indices(raw_mesh, decimated_mesh):
     tree = cKDTree(raw_mesh.vertices)
     _, idx = tree.query(decimated_mesh.vertices)
+    return idx
+
+
+def transfer_to_decimated(raw_mesh, raw_values, decimated_mesh):
+    idx = nearest_raw_indices(raw_mesh, decimated_mesh)
     return raw_values[idx]
 
 
@@ -335,6 +366,44 @@ SKIN_STOPS = [
     (0.00, (0xb9, 0x7a, 0x57)),  # deeper tan (shadow / jaw / neck)
     (1.00, (0xe0, 0xac, 0x85)),  # lighter warm highlight
 ]
+
+
+# Confirmed via direct visual + numeric inspection of the raw DICOM: a
+# connected-component analysis of high-HU voxels (>1800 HU) in this area
+# found a single 2404-voxel structure spanning min=1801, mean=3182,
+# max=6825 HU -- consistent with a real fixation plate (thin edges blending
+# into bone via partial-volume averaging, thicker screw points reading much
+# higher), and visually confirmed across dozens of slices as a structure
+# that traces the bone surface rather than a rounded/tooth-like blob, at
+# the location the user identified (right maxilla to orbital bone). Given
+# in the original 196x512x512 volume's index space, with a small margin
+# since decimated mesh vertices won't land exactly on original voxel
+# centers.
+CONFIRMED_PLATE_BBOX = {"slice": (85, 115), "row": (135, 182), "col": (148, 208)}
+CONFIRMED_PLATE_HU_FLOOR = 1750  # the plate's own voxels start ~1800 HU at its thinnest
+
+
+def roi_mask(index_coords, bbox):
+    s, r, c = index_coords[:, 0], index_coords[:, 1], index_coords[:, 2]
+    return (
+        (s >= bbox["slice"][0]) & (s <= bbox["slice"][1])
+        & (r >= bbox["row"][0]) & (r <= bbox["row"][1])
+        & (c >= bbox["col"][0]) & (c <= bbox["col"][1])
+    )
+
+
+def build_metal_mask(mesh, hu_detect, index_coords):
+    """Two complementary detectors combined: a global density-seeded region
+    grow (catches high-confidence metal anywhere, in case there's hardware
+    beyond the one confirmed plate) plus a spatial-ROI detector anchored to
+    the plate's actual confirmed location and real density floor (catches
+    its full extent, since raw HU alone overlaps too much with teeth/dense
+    bone to separate cleanly by value alone)."""
+    global_mask = expand_metal_region(mesh, hu_detect, METAL_SEED_HU, METAL_EXPAND_HU)
+    plate_roi = roi_mask(index_coords, CONFIRMED_PLATE_BBOX)
+    plate_mask = plate_roi & (hu_detect >= CONFIRMED_PLATE_HU_FLOOR)
+    print(f"    confirmed-plate ROI: {plate_mask.sum()} verts (region-grow separately found {global_mask.sum()})")
+    return global_mask | plate_mask
 
 
 def expand_metal_region(mesh, hu_values, seed_threshold, expand_threshold):
@@ -482,17 +551,32 @@ def smooth_masked(mesh, mask, iterations=2):
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def process_tissue(vol, level, target_faces, color_fn, offset_mm):
+def process_tissue(vol, level, target_faces, color_fn, offset_mm, detect_offsets=None, roi_vol=None):
     print(f"  marching_cubes level={level} ...")
     raw_mesh, _ = volume_to_display_mesh(vol, level)
     print(f"  raw mesh: {len(raw_mesh.vertices)} verts, {len(raw_mesh.faces)} faces")
 
-    raw_hu = sample_hu_along_normals(raw_mesh, vol, offset_mm=offset_mm)
+    sign = resolve_normal_sign(raw_mesh, vol)
+    raw_hu = sample_hu_along_normals(raw_mesh, vol, offset_mm, sign)
 
     print(f"  decimating to {target_faces} faces ...")
     decimated = decimate(raw_mesh, target_faces)
-    dec_hu = transfer_to_decimated(raw_mesh, raw_hu, decimated)
-    colors = color_fn(decimated, dec_hu)
+    nn_idx = nearest_raw_indices(raw_mesh, decimated)
+    dec_hu = raw_hu[nn_idx]
+
+    if detect_offsets:
+        raw_hu_detect = sample_hu_max_multi_offset(raw_mesh, vol, sign, detect_offsets)
+        # ROI bounding boxes are defined in the *original* (non-supersampled)
+        # volume's index space -- if this tissue's geometry came from a
+        # supersampled volume, index coordinates must be computed against
+        # the original volume's spacing/slice_thickness instead, or every
+        # slice index would be off by the supersampling factor.
+        raw_idx_coords = sample_index_at_surface(raw_mesh, roi_vol or vol)
+        dec_hu_detect = raw_hu_detect[nn_idx]
+        dec_idx_coords = raw_idx_coords[nn_idx]
+        colors = color_fn(decimated, dec_hu, dec_hu_detect, dec_idx_coords)
+    else:
+        colors = color_fn(decimated, dec_hu)
     apply_vertex_colors(decimated, colors)
 
     print("  closing gaps ...")
@@ -532,7 +616,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dicom-zip", required=True)
     ap.add_argument("--data-js-out", default="data.js")
-    ap.add_argument("--bone-faces", type=int, default=700_000)
+    ap.add_argument("--bone-faces", type=int, default=1_000_000)
     ap.add_argument("--skin-faces", type=int, default=150_000)
     args = ap.parse_args()
 
@@ -564,14 +648,15 @@ def main():
     print("Supersampling bone volume for smoother geometry ...")
     bone_vol = supersample_volume(soft_vol)
 
-    def bone_color_fn(mesh, hu):
-        metal_mask = expand_metal_region(mesh, hu, METAL_SEED_HU, METAL_EXPAND_HU)
+    def bone_color_fn(mesh, hu, hu_detect, idx_coords):
+        metal_mask = build_metal_mask(mesh, hu_detect, idx_coords)
         return color_bone(hu, p5, p995, metal_mask)
 
     print("Processing bone ...")
     bone_mesh, bone_complete = process_tissue(
         bone_vol, level=250, target_faces=args.bone_faces,
         color_fn=bone_color_fn, offset_mm=1.5,
+        detect_offsets=[0.3, 0.8, 1.3, 1.8, 2.3], roi_vol=soft_vol,
     )
 
     print("Processing skin ...")
