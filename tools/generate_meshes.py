@@ -308,19 +308,28 @@ def lerp_color(t, stops):
     return out
 
 
-METAL_COLOR = (0xbf, 0xc1, 0xc7)  # neutral silver-gray, titanium implant hardware
+# Three visually distinct tiers instead of one continuous gradient: bone
+# keeps a warm density gradient, teeth get their own solid cool tone (not a
+# continuation of bone-white, which is what made them hard to tell apart),
+# and metal gets a bold, unmistakable color -- accuracy to real titanium's
+# actual gray took a back seat to "obviously not bone" per explicit request.
+TEETH_COLOR = (0xd9, 0xcf, 0xfa)   # pale lavender -- cool, contrasts with bone's warm gradient
+METAL_COLOR = (0x29, 0x8b, 0xff)   # bold saturated blue -- unmistakable regardless of lighting
+
 # Recalibrated against this patient's actual confirmed hardware: a plate
 # connecting the right maxilla to the orbital bone, located and verified via
 # the scanner's own segmented 3D render plus direct voxel inspection (a
 # compact, non-streaking, geometrically regular high-HU cluster spatially
 # separate from the dental arch). Its own per-vertex sampled density peaks
-# at ~5039 HU, well below the previous 5500 cutoff -- which is exactly why
-# nothing was being flagged. Teeth in the same scan peak at ~3969 HU sampled.
-# 4300 sits between the two with margin on both sides; the gap is narrow
-# (real overlap exists in the underlying density distributions), so this
-# won't be perfectly precise -- the scanner's own built-in segmentation
-# isn't either.
-METAL_HU_THRESHOLD = 4300
+# at ~5039 HU. Teeth in the same scan peak at ~3969 HU sampled. SEED sits
+# above teeth's max with margin; EXPAND is lower, used only to grow the
+# seed along physically *connected* mesh regions (see expand_metal_region)
+# so the plate's full thin extent shows, not just its densest points --
+# it's anchored to a real detected object, not a separate blanket cutoff
+# that could catch teeth on its own.
+METAL_SEED_HU = 4300
+METAL_EXPAND_HU = 3200
+TEETH_HU_FLOOR = 2427  # roughly p99.5 -- denser than any normal cortical bone gets
 
 SKIN_STOPS = [
     (0.00, (0xb9, 0x7a, 0x57)),  # deeper tan (shadow / jaw / neck)
@@ -328,26 +337,52 @@ SKIN_STOPS = [
 ]
 
 
-def color_bone(hu_values, p5, p95, p995):
-    # Explicit HU-anchored stops spanning the *entire* range up to the metal
-    # cutoff -- a plain p5-p95 normalization clips everything denser than p95
-    # (typical cortical bone AND tooth enamel both blow past it) to one flat
-    # color, which is exactly why teeth and bone were indistinguishable.
-    # The extra stops between p95 and the metal threshold give dense cortical
-    # bone and enamel-range density their own visually distinct (but still
-    # continuous, not hard-classified) colors.
+def expand_metal_region(mesh, hu_values, seed_threshold, expand_threshold):
+    """Seed from high-confidence metal vertices, then grow along mesh edges
+    where both endpoints exceed the lower expand threshold -- captures the
+    hardware's full physical shape (including thinner edges where partial-
+    volume averaging pulls the reading down) without a separate global
+    cutoff that could independently catch dense teeth."""
+    seed_mask = hu_values >= seed_threshold
+    if not seed_mask.any():
+        return seed_mask
+    expand_mask = hu_values >= expand_threshold
+
+    edges = mesh.edges_unique
+    valid = expand_mask[edges[:, 0]] & expand_mask[edges[:, 1]]
+    g = nx.Graph()
+    g.add_nodes_from(np.where(expand_mask)[0].tolist())
+    g.add_edges_from(edges[valid].tolist())
+
+    reachable = set()
+    for s in np.where(seed_mask)[0]:
+        if s in g:
+            reachable |= nx.node_connected_component(g, s)
+        else:
+            reachable.add(int(s))
+    final_mask = np.zeros(len(hu_values), dtype=bool)
+    final_mask[list(reachable)] = True
+    print(f"    metal region: {seed_mask.sum()} seed verts -> {final_mask.sum()} after connected expansion")
+    return final_mask
+
+
+def color_bone(hu_values, p5, p995, metal_mask):
+    # Bone gradient spans p5 to p99.5 -- the real range of normal cortical
+    # bone density. Anything past that (teeth, metal) is a solid, distinct
+    # tier rather than a continuation of the gradient.
     hu_stops = [
-        (p5,                        (0x8a, 0x4a, 0x1e)),  # dark burnt-orange, thin/porous bone
-        (p5 + (p95 - p5) * 0.35,    (0xd8, 0xa5, 0x4a)),  # gold
-        (p95,                       (0xf0, 0xe6, 0xd2)),  # warm off-white, typical dense cortical
-        (p995,                      (0xff, 0xff, 0xff)),  # bright white, very dense cortical
-        (METAL_HU_THRESHOLD - 1,    (0xd8, 0xc8, 0xff)),  # pale violet-white, enamel-range density
+        (p5,                            (0x8a, 0x4a, 0x1e)),  # dark burnt-orange, thin/porous bone
+        (p5 + (p995 - p5) * 0.30,       (0xd8, 0xa5, 0x4a)),  # gold
+        (p5 + (p995 - p5) * 0.65,       (0xf0, 0xe6, 0xd2)),  # warm off-white, typical dense cortical
+        (p995,                          (0xff, 0xff, 0xff)),  # bright white, very dense cortical
     ]
     lo, hi = hu_stops[0][0], hu_stops[-1][0]
     stops01 = [((hv - lo) / (hi - lo), c) for hv, c in hu_stops]
     t = (hu_values - lo) / (hi - lo)
     colors = lerp_color(t, stops01)
-    metal_mask = hu_values >= METAL_HU_THRESHOLD
+
+    teeth_mask = (hu_values > TEETH_HU_FLOOR) & ~metal_mask
+    colors[teeth_mask] = np.array(TEETH_COLOR, dtype=np.float64)
     colors[metal_mask] = np.array(METAL_COLOR, dtype=np.float64)
     return colors / 255.0
 
@@ -457,7 +492,7 @@ def process_tissue(vol, level, target_faces, color_fn, offset_mm):
     print(f"  decimating to {target_faces} faces ...")
     decimated = decimate(raw_mesh, target_faces)
     dec_hu = transfer_to_decimated(raw_mesh, raw_hu, decimated)
-    colors = color_fn(dec_hu)
+    colors = color_fn(decimated, dec_hu)
     apply_vertex_colors(decimated, colors)
 
     print("  closing gaps ...")
@@ -529,16 +564,20 @@ def main():
     print("Supersampling bone volume for smoother geometry ...")
     bone_vol = supersample_volume(soft_vol)
 
+    def bone_color_fn(mesh, hu):
+        metal_mask = expand_metal_region(mesh, hu, METAL_SEED_HU, METAL_EXPAND_HU)
+        return color_bone(hu, p5, p995, metal_mask)
+
     print("Processing bone ...")
     bone_mesh, bone_complete = process_tissue(
         bone_vol, level=250, target_faces=args.bone_faces,
-        color_fn=lambda hu: color_bone(hu, p5, p95, p995), offset_mm=1.5,
+        color_fn=bone_color_fn, offset_mm=1.5,
     )
 
     print("Processing skin ...")
     skin_mesh, skin_complete = process_tissue(
         skin_vol, level=-300, target_faces=args.skin_faces,
-        color_fn=color_skin, offset_mm=1.5,
+        color_fn=lambda mesh, hu: color_skin(hu), offset_mm=1.5,
     )
 
     print("Exporting GLBs and encoding ...")
