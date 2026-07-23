@@ -126,6 +126,32 @@ def build_volume(slices):
     }
 
 
+def supersample_volume(vol, target_ratio=1.0):
+    """Resample the slice axis toward isotropic (matching in-plane spacing)
+    via cubic interpolation before marching cubes.
+
+    This does not invent anatomy -- it interpolates between real measured
+    slices, the same kind of operation as viewing a sagittal/coronal
+    reformat of an axial series -- but it substantially reduces the
+    "stepped"/faceted look that a 1mm slice thickness produces on small
+    round features (screw heads, thin trabecular struts) versus the much
+    finer 0.33mm in-plane resolution. Marching cubes can only place
+    vertices as finely as the voxel grid allows, so upsampling the coarser
+    axis first is what actually fixes it -- adding more triangles to an
+    isosurface that's already blocky at the source doesn't make it round.
+    """
+    zoom_z = vol["slice_thickness"] / vol["row_spacing"] * target_ratio
+    if zoom_z <= 1.0:
+        return vol
+    print(f"  supersampling slice axis {zoom_z:.2f}x ({vol['hu'].shape} -> ", end="")
+    hu_super = ndimage.zoom(vol["hu"].astype(np.float32), (zoom_z, 1, 1), order=3)
+    print(f"{hu_super.shape})")
+    new_vol = dict(vol)
+    new_vol["hu"] = hu_super.astype(np.int16)
+    new_vol["slice_thickness"] = vol["slice_thickness"] / zoom_z
+    return new_vol
+
+
 def validate_kernel_choice(sharp_vol, soft_vol):
     """Print sharpness/noise diagnostics for both kernels -- informational.
     The sharp kernel's higher Laplacian variance turned out to be mostly
@@ -460,7 +486,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dicom-zip", required=True)
     ap.add_argument("--data-js-out", default="data.js")
-    ap.add_argument("--bone-faces", type=int, default=450_000)
+    ap.add_argument("--bone-faces", type=int, default=700_000)
     ap.add_argument("--skin-faces", type=int, default=150_000)
     args = ap.parse_args()
 
@@ -480,13 +506,17 @@ def main():
     # right along with genuine fine structure, so the sharp-kernel bone
     # actually looked *less* detailed once rendered, confirmed by direct
     # visual comparison against the previous (soft-kernel) pipeline.
-    bone_vol = soft_vol
     skin_vol = soft_vol
 
-    bone_hu_all = bone_vol["hu"]
+    # Calibrate against the real measured voxel distribution, before any
+    # interpolation, so the color mapping reflects actual scanner values.
+    bone_hu_all = soft_vol["hu"]
     bone_voxels = bone_hu_all[bone_hu_all >= 250]
     p5, p95, p995 = np.percentile(bone_voxels, [5, 95, 99.5])
     print(f"Bone HU recalibration range: p5={p5:.0f} p95={p95:.0f} p99.5={p995:.0f}")
+
+    print("Supersampling bone volume for smoother geometry ...")
+    bone_vol = supersample_volume(soft_vol)
 
     print("Processing bone ...")
     bone_mesh, bone_complete = process_tissue(
