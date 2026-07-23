@@ -221,9 +221,9 @@
       <label>Cross-section</label>
       <div class="toggle-row">
         <span class="toggle-label">Clipping plane</span>
-        <div class="switch" id="clipSwitch"><div class="knob"></div></div>
+        <div class="switch on" id="clipSwitch"><div class="knob"></div></div>
       </div>
-      <div class="slider-row" id="clipSliderRow" style="display:none; margin-top:10px;">
+      <div class="slider-row" id="clipSliderRow" style="display:flex; margin-top:10px;">
         <input type="range" id="clipSlider" min="-100" max="100" value="100">
       </div>
     </div>
@@ -318,6 +318,8 @@ renderer.setSize(wrap.clientWidth, wrap.clientHeight);
 renderer.localClippingEnabled = true;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
 wrap.appendChild(renderer.domElement);
 
 
@@ -327,8 +329,9 @@ controls.dampingFactor = 0.08;
 controls.minDistance = 50;
 controls.maxDistance = 1200;
 
-// Lighting — soft key + fill + rim for a clinical but dimensional look
-const key = new THREE.DirectionalLight(0xfff2e0, 1.8);
+// Lighting — dominant directional key for real shadow definition; fill/rim/ambient
+// kept low so they don't flatten the density color-coding on the mesh.
+const key = new THREE.DirectionalLight(0xfff2e0, 3.0);
 key.position.set(120, 180, 220);
 key.castShadow = true;
 key.shadow.mapSize.set(2048, 2048);
@@ -339,18 +342,18 @@ key.shadow.camera.bottom = -160;
 key.shadow.camera.near = 20;
 key.shadow.camera.far = 700;
 key.shadow.bias = -0.0015;
-key.shadow.radius = 3;
+key.shadow.radius = 1.4;
 scene.add(key);
-const fill = new THREE.DirectionalLight(0xaecbff, 0.55);
+const fill = new THREE.DirectionalLight(0xaecbff, 0.25);
 fill.position.set(-150, -60, 120);
 scene.add(fill);
-const rim = new THREE.DirectionalLight(0xffb454, 0.35);
+const rim = new THREE.DirectionalLight(0xffb454, 0.3);
 rim.position.set(0, -200, -200);
 scene.add(rim);
-const topFill = new THREE.DirectionalLight(0xffffff, 0.4);
+const topFill = new THREE.DirectionalLight(0xffffff, 0.18);
 topFill.position.set(0, 300, 0);
 scene.add(topFill);
-scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+scene.add(new THREE.AmbientLight(0xffffff, 0.18));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 let boneMesh = null, skinMesh = null, boneCompleteMesh = null, skinCompleteMesh = null;
@@ -407,7 +410,7 @@ try {
   loader.parse(boneBuf, '', gltf => {
     boneMesh = findFirstMesh(gltf.scene);
     boneMesh.material = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness:0.65, metalness:0.0,
+      vertexColors: true, roughness:0.5, metalness:0.0,
       transparent:true, opacity:1.0,
       clippingPlanes:[clipPlane], side: THREE.DoubleSide
     });
@@ -415,6 +418,15 @@ try {
     boneMesh.receiveShadow = true;
     scene.add(gltf.scene);
     sceneScale = frameObject(gltf.scene);
+    // Size the shadow-camera frustum to the actual mesh instead of a fixed
+    // guess, so shadows aren't clipped off on larger/smaller scans.
+    const shadowExtent = sceneScale * 0.75;
+    key.shadow.camera.left = -shadowExtent;
+    key.shadow.camera.right = shadowExtent;
+    key.shadow.camera.top = shadowExtent;
+    key.shadow.camera.bottom = -shadowExtent;
+    key.shadow.camera.updateProjectionMatrix();
+    updateClip();
     checkLoaded();
   }, err => showError('bone mesh — ' + err.message));
 
@@ -439,7 +451,7 @@ try {
   loader.parse(boneCBuf, '', gltf => {
     boneCompleteMesh = findFirstMesh(gltf.scene);
     boneCompleteMesh.material = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness:0.65, metalness:0.0,
+      vertexColors: true, roughness:0.5, metalness:0.0,
       transparent:true, opacity:1.0,
       clippingPlanes:[clipPlane], side: THREE.DoubleSide
     });
@@ -532,7 +544,7 @@ btnComplete.onclick = ()=> setMode('complete');
 const clipSwitch = document.getElementById('clipSwitch');
 const clipSliderRow = document.getElementById('clipSliderRow');
 const clipSlider = document.getElementById('clipSlider');
-let clipEnabled = false;
+let clipEnabled = true;
 let clipAxis = 'x';
 
 clipSwitch.onclick = ()=>{
@@ -556,6 +568,8 @@ document.querySelectorAll('#axisBtns .layer-btn').forEach(b=>{
     updateClip();
   };
 });
+
+updateClip(); // apply the default-on, fully-open (100%) clip state at boot
 
 function updateClip(){
   if(!clipEnabled){
