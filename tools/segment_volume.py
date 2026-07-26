@@ -64,19 +64,44 @@ METAL_SEED_MIN_MM3 = 20
 METAL_SEED_MAX_MM3 = 800       # excludes naturally-dense bone masses (see below)
 
 # Unclaimed halo around each seed class, before bone becomes a competing
-# marker -- per-class, not one shared value. Metal's stays tight (1.5mm):
-# it already captures the confirmed plate's full extent precisely, and
-# hardware sits in bone, so there's no reason to let it claim more.
-# Teeth get a wider halo (4mm): root dentin genuinely has bone-range HU
-# (confirmed: a resin-filling hypothesis for an all-blue-classified tooth
-# was checked and ruled out -- the tooth simply had no competing tooth
-# marker beyond the enamel seed's immediate 1.5mm, so its root fell to
-# bone by default, not because anything about it was actually metal or
-# bone). A wider tooth halo won't fully solve root-vs-bone -- that's a
-# genuine density ambiguity no buffer size resolves -- but it lets teeth
-# claim more of their own structure before conceding by default.
+# marker -- per-class, not one shared value. Teeth get a wider halo (4mm):
+# root dentin genuinely has bone-range HU (confirmed: a resin-filling
+# hypothesis for an all-blue-classified tooth was checked and ruled out --
+# the tooth simply had no competing tooth marker beyond the enamel seed's
+# immediate 1.5mm, so its root fell to bone by default, not because
+# anything about it was actually metal or bone). A wider tooth halo won't
+# fully solve root-vs-bone -- that's a genuine density ambiguity no buffer
+# size resolves -- but it lets teeth claim more of their own structure
+# before conceding by default.
+#
+# Metal stays tight (1.5mm): it already captures the confirmed plate's
+# full extent precisely, and hardware sits in bone, so there's no reason
+# to let it claim more.
+#
+# Investigated but NOT the actual lever here: of the confirmed metal
+# component's 10016 voxels, 7612 (76%) are watershed-grown rather than
+# seed voxels, and that grown population's HU distribution (mean 893,
+# median 863, p90 1521) is statistically indistinguishable from this
+# scan's overall BONE class (mean 850, p90 1510) -- real bone, not a
+# metal-edge blur. But shrinking METAL_MARKER_BUFFER_MM to 0.5mm changed
+# *none* of those 7612 voxels' classification -- direct measurement showed
+# 100% of them are already within TOOTH_MARKER_BUFFER_MM (4mm) of a tooth
+# seed, so no bone marker can exist there regardless of the metal buffer:
+# this specific hardware sits close enough to the upper teeth that the
+# tooth exclusion zone, not the metal one, is what's actually forcing that
+# whole pocket to resolve to TOOTH-or-METAL only, bone never in the
+# running. A real fix needs to reconcile the tooth and metal buffers where
+# they overlap, not just retune one of them -- left as a known, understood
+# limitation rather than a guessed fix (see project notes).
 TOOTH_MARKER_BUFFER_MM = 4.0
 METAL_MARKER_BUFFER_MM = 1.5
+
+# See the metal/bone reconciliation step in segment() for the full
+# justification -- this scan's overall BONE class sits at p90=1510 HU;
+# titanium's contrast with bone is large enough that a meaningfully
+# metal-containing voxel would read well above this even after partial-
+# volume blending.
+METAL_HALO_BONE_RECLAIM_HU_MAX = 1510
 
 # Bone connected components under this physical size are dropped (relabeled
 # UNKNOWN, not forced into a class) before meshing. Confirmed by direct
@@ -113,6 +138,19 @@ BONE_MIN_COMPONENT_MM3 = 15.0
 # filter: exactly one clears a 3500 HU p90 floor, and it's the confirmed
 # plate, by a wide margin (4822 vs. the runner-up's 2980).
 METAL_DENSE_P90_HU_MIN = 3500
+
+# A proximity-to-confirmed-hardware secondary tier was tried (this
+# patient's imaging report documents 3 separate ossific densities, but
+# only 1 clears the p90 floor alone) and rejected after direct visual
+# inspection: the nearest excluded candidate by density (p90 2874, 5.2mm
+# from the confirmed plate) turned out to be two ordinary maxillary teeth
+# in the dental arch, not hardware -- teeth sit naturally close to
+# maxillary-sinus hardware and are plenty dense enough to pass a density
+# floor, so proximity-to-metal is not a safe substitute for an actual
+# hardware signature here. Left as a single confirmed tier for now; the
+# other 2 documented pieces are not currently distinguishable from
+# surrounding anatomy by any criterion checked so far, so they stay BONE
+# (explicit "not confidently classified" beats a wrong guess).
 
 
 def voxel_volume_mm3(vol):
@@ -296,6 +334,53 @@ def segment(vol):
     tooth_mask = ws == 1
     metal_mask = ws == 2
     del ws
+
+    # --- Reconcile metal/bone where the tooth and metal exclusion zones
+    # overlap. Confirmed by direct measurement on this patient's real ORIF
+    # hardware: where a metal object sits close enough to a tooth that NO
+    # bone marker can exist nearby (blocked by TOOTH_MARKER_BUFFER_MM, not
+    # METAL_MARKER_BUFFER_MM -- the metal buffer alone would have allowed
+    # one), every such voxel defaults to whichever of tooth/metal is
+    # geodesically nearer, bone never in the running even where the
+    # density is plainly ordinary bone. This is not the already-accepted
+    # tooth-root-vs-bone ambiguity (root dentin genuinely reads at
+    # bone-range HU, and no buffer size fixes that) -- it's specifically
+    # about METAL claiming bone-range territory it only won by default.
+    # Titanium's HU is thousands higher than bone's; any voxel with a
+    # meaningful (>~15%) real metal fraction would average far above
+    # ordinary bone's own range even after partial-volume blending, so a
+    # watershed-grown metal voxel that reads at plain-bone density wasn't
+    # meaningfully metal to begin with. Reclaimed only where BOTH hold:
+    # (a) a bone marker would have existed here under the metal buffer
+    # alone (i.e. tooth proximity is the only reason it's missing), and
+    # (b) HU sits at or below this scan's own overall bone p90 (1510) --
+    # comfortably above ordinary soft tissue, comfortably below anything
+    # with a real metal contribution. Deliberately narrow: it only ever
+    # touches METAL voxels, never TOOTH (the root-vs-bone ambiguity is
+    # left alone on purpose).
+    grown_metal_mask = metal_mask & ~metal_seed_mask
+    if grown_metal_mask.any():
+        dist_from_metal = ndimage.distance_transform_edt(~metal_seed_mask, sampling=sampling)
+        blocked_by_metal_alone = grown_metal_mask & (dist_from_metal > METAL_MARKER_BUFFER_MM)
+        del dist_from_metal
+        gc.collect()
+        if blocked_by_metal_alone.any():
+            dist_from_tooth = ndimage.distance_transform_edt(~tooth_seed_mask, sampling=sampling)
+            blocked_by_tooth = blocked_by_metal_alone & (dist_from_tooth <= TOOTH_MARKER_BUFFER_MM)
+            del dist_from_tooth
+            gc.collect()
+            reclaim_mask = blocked_by_tooth & (hu <= METAL_HALO_BONE_RECLAIM_HU_MAX)
+            n_reclaim = int(reclaim_mask.sum())
+            if n_reclaim:
+                print(f"  reconciling metal/bone near teeth: reclaiming {n_reclaim} voxels "
+                      f"({n_reclaim*voxel_vol:.1f}mm^3) from METAL to BONE "
+                      f"(blocked from a bone marker only by tooth proximity, HU <= {METAL_HALO_BONE_RECLAIM_HU_MAX})")
+                metal_mask = metal_mask & ~reclaim_mask
+            del reclaim_mask, blocked_by_tooth
+        del blocked_by_metal_alone
+    del grown_metal_mask
+    gc.collect()
+
     bone_mask = dense_mask & ~tooth_mask & ~metal_mask
 
     # Drop bone connected components under BONE_MIN_COMPONENT_MM3 -- isolated
