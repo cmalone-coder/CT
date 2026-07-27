@@ -70,6 +70,30 @@ def export_series(slices, out_dir, key):
     ww = float(ww[0] if hasattr(ww, "__iter__") else ww)
     kernel = str(slices[0].get("ConvolutionKernel", ""))
 
+    # Full 3D geometry (not just the Z-only relative offsets this exporter
+    # already tracked) -- needed so the gallery's synced triplanar view can
+    # map a physical point to the right slice/pixel in *any* of these
+    # independently-reformatted series, not just report a position along
+    # one series' own axis. Same convention and the same verified
+    # sign-correction approach as generate_meshes.py's build_volume(): the
+    # cross-product handedness of (row_cosine, col_cosine) doesn't
+    # guarantee the slice-stacking normal matches the real ascending-IPP
+    # sort order, so it's checked against the actual last-slice position
+    # rather than assumed.
+    orientation = [float(x) for x in slices[0].ImageOrientationPatient]
+    row_cosine = np.array(orientation[0:3])  # direction of increasing column index
+    col_cosine = np.array(orientation[3:6])  # direction of increasing row index
+    origin = np.array([float(x) for x in slices[0].ImagePositionPatient])
+    normal = np.cross(row_cosine, col_cosine)
+    last_ipp = np.array([float(x) for x in slices[-1].ImagePositionPatient])
+    predicted_delta = (len(slices) - 1) * thickness * normal
+    actual_delta = last_ipp - origin
+    if np.dot(actual_delta, predicted_delta) < 0:
+        normal = -normal
+    err = np.linalg.norm(origin + (len(slices) - 1) * thickness * normal - last_ipp)
+    if err > max(2.0, thickness):
+        print(f"  WARNING: {key} slice-normal sanity check off by {err:.2f}mm")
+
     series_dir = out_dir / key
     series_dir.mkdir(parents=True, exist_ok=True)
 
@@ -96,6 +120,10 @@ def export_series(slices, out_dir, key):
         "defaultWindowWidth": ww,
         "kernel": kernel,
         "positionsMm": positions,
+        "originMm": [round(float(x), 4) for x in origin],
+        "rowCosine": [round(float(x), 6) for x in row_cosine],
+        "colCosine": [round(float(x), 6) for x in col_cosine],
+        "normal": [round(float(x), 6) for x in normal],
     }
 
 

@@ -218,6 +218,24 @@
     border-radius:3px;
   }
 
+  .tri-grid{
+    flex:1; display:flex; gap:2px; background:var(--panel-line);
+    overflow:hidden; min-height:0;
+  }
+  .tri-pane{
+    flex:1; position:relative; min-width:0;
+    background:radial-gradient(ellipse at center, #141516 0%, #0a0b0c 75%);
+    display:flex; align-items:center; justify-content:center; overflow:hidden;
+  }
+  .tri-pane canvas{max-width:100%; max-height:100%; cursor:crosshair;}
+  .tri-label{
+    position:absolute; top:12px; left:14px; z-index:2;
+    font-family:var(--mono); font-size:11px; color:var(--text-dim); letter-spacing:0.06em;
+  }
+  @media (max-width: 820px){
+    .tri-grid{flex-direction:column;}
+  }
+
   /* Scrub bar */
   .scrub{
     flex-shrink:0;
@@ -311,6 +329,9 @@
 <div class="nav-backdrop" id="navBackdrop"></div>
 <div class="layout">
   <nav id="nav">
+    <div class="control-group" style="border-top:none; padding-top:0;">
+      <button class="reset-btn" id="triToggleBtn">Synced 3-plane view</button>
+    </div>
     <div id="seriesList"></div>
     <div class="control-group" id="windowLevelGroup">
       <label>Window / Level</label>
@@ -339,6 +360,21 @@
       <button id="prevBtn">‹</button>
       <input type="range" id="slider" min="1" max="1" value="1">
       <button id="nextBtn">›</button>
+    </div>
+
+    <div class="tri-grid" id="triGrid" style="display:none;">
+      <div class="tri-pane">
+        <div class="tri-label">Axial</div>
+        <canvas id="tri-axial"></canvas>
+      </div>
+      <div class="tri-pane">
+        <div class="tri-label">Coronal</div>
+        <canvas id="tri-coronal"></canvas>
+      </div>
+      <div class="tri-pane">
+        <div class="tri-label">Sagittal</div>
+        <canvas id="tri-sagittal"></canvas>
+      </div>
     </div>
   </main>
 </div>
@@ -703,6 +739,137 @@ window.addEventListener('keydown', e=>{
 });
 
 window.addEventListener('resize', ()=>{ redraw(); });
+
+// ---------------------------------------------------------------------
+// Synchronized triplanar view -- axial/coronal/sagittal shown together,
+// linked by one shared physical point (mm). Each series' full 3D geometry
+// (origin + row/col direction cosines + slice normal, from
+// tools/export_gallery_slices.py) maps that shared point to the right
+// slice index and in-plane crosshair position in every pane -- exact
+// vector math, not an assumption that these independently-reformatted
+// planes are perfectly axis-aligned (the manifest itself shows a slight
+// tilt on the coronal/sagittal/1.5mm-axial series).
+// ---------------------------------------------------------------------
+const TRI_KEYS = { axial: 'axial_1mm_a', coronal: 'coronal_a', sagittal: 'sagittal_a' };
+let triActive = false;
+let sharedPoint = null;
+let triWc = 40, triWw = 400;
+const triCache = new Map();
+
+function seriesPointAtPixel(s, row, col, sliceIdx){
+  const [ox,oy,oz] = s.originMm, [rx,ry,rz] = s.rowCosine, [cx,cy,cz] = s.colCosine, [nx,ny,nz] = s.normal;
+  const cS = col * s.colSpacingMm, rS = row * s.rowSpacingMm, sS = sliceIdx * s.sliceThicknessMm;
+  return { x: ox + cS*rx + rS*cx + sS*nx, y: oy + cS*ry + rS*cy + sS*ny, z: oz + cS*rz + rS*cz + sS*nz };
+}
+
+function seriesPixelAtPoint(s, p){
+  const dx = p.x - s.originMm[0], dy = p.y - s.originMm[1], dz = p.z - s.originMm[2];
+  const dot = ([a,b,c]) => dx*a + dy*b + dz*c;
+  return {
+    col: dot(s.rowCosine) / s.colSpacingMm,
+    row: dot(s.colCosine) / s.rowSpacingMm,
+    sliceIdxFloat: dot(s.normal) / s.sliceThicknessMm,
+  };
+}
+
+async function getTriHu(key, sliceIdx1based){
+  const cacheKey = key + '/' + sliceIdx1based;
+  let hu = triCache.get(cacheKey);
+  if(!hu){
+    const idx = String(sliceIdx1based).padStart(4,'0');
+    const buf = await fetch(`images_raw/${key}/${idx}.raw`).then(r=>r.arrayBuffer());
+    hu = new Int16Array(buf);
+    triCache.set(cacheKey, hu);
+  }
+  return hu;
+}
+
+async function renderTriPane(planeName){
+  const key = TRI_KEYS[planeName];
+  const s = rawByKey[key];
+  const canvas = document.getElementById('tri-' + planeName);
+  const ctx = canvas.getContext('2d');
+  const { row, col, sliceIdxFloat } = seriesPixelAtPoint(s, sharedPoint);
+  const sliceIdx = Math.max(0, Math.min(s.count - 1, Math.round(sliceIdxFloat)));
+  const hu = await getTriHu(key, sliceIdx + 1);
+
+  canvas.width = s.width; canvas.height = s.height;
+  const imgData = ctx.createImageData(s.width, s.height);
+  const lo = triWc - triWw/2, scale = 255/triWw;
+  const out = imgData.data;
+  for(let i=0; i<hu.length; i++){
+    let v = (hu[i]-lo)*scale; v = v<0?0:(v>255?255:v);
+    const o=i*4; out[o]=out[o+1]=out[o+2]=v; out[o+3]=255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  ctx.strokeStyle = 'rgba(255,180,84,0.85)';
+  ctx.lineWidth = Math.max(1, s.width/400);
+  ctx.beginPath();
+  ctx.moveTo(0, row); ctx.lineTo(s.width, row);
+  ctx.moveTo(col, 0); ctx.lineTo(col, s.height);
+  ctx.stroke();
+
+  canvas.dataset.sliceIdx = sliceIdx;
+}
+
+function renderAllTriPanes(){
+  ['axial','coronal','sagittal'].forEach(renderTriPane);
+}
+
+function triClientToPixel(canvas, key, clientX, clientY){
+  const rect = canvas.getBoundingClientRect();
+  const s = rawByKey[key];
+  return {
+    col: (clientX - rect.left) * (s.width / rect.width),
+    row: (clientY - rect.top) * (s.height / rect.height),
+  };
+}
+
+function wireTriPane(planeName){
+  const key = TRI_KEYS[planeName];
+  const canvas = document.getElementById('tri-' + planeName);
+  canvas.addEventListener('click', e => {
+    const s = rawByKey[key];
+    const { col, row } = triClientToPixel(canvas, key, e.clientX, e.clientY);
+    const sliceIdx = parseInt(canvas.dataset.sliceIdx || '0');
+    sharedPoint = seriesPointAtPixel(s, row, col, sliceIdx);
+    renderAllTriPanes();
+  });
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const s = rawByKey[key];
+    const delta = e.deltaY > 0 ? 1 : -1;
+    sharedPoint = {
+      x: sharedPoint.x + delta*s.sliceThicknessMm*s.normal[0],
+      y: sharedPoint.y + delta*s.sliceThicknessMm*s.normal[1],
+      z: sharedPoint.z + delta*s.sliceThicknessMm*s.normal[2],
+    };
+    renderAllTriPanes();
+  }, {passive:false});
+}
+
+function initSharedPoint(){
+  const s = rawByKey[TRI_KEYS.axial];
+  sharedPoint = seriesPointAtPixel(s, s.height/2, s.width/2, Math.floor(s.count/2));
+  triWc = s.defaultWindowCenter;
+  triWw = s.defaultWindowWidth;
+}
+
+function setTriActive(on){
+  triActive = on;
+  document.getElementById('triGrid').style.display = on ? 'flex' : 'none';
+  document.getElementById('stage').style.display = on ? 'none' : 'block';
+  document.querySelector('.scrub').style.display = on ? 'none' : 'flex';
+  document.getElementById('windowLevelGroup').style.display = on ? 'none' : (current && !current.flat ? 'block' : 'none');
+  document.getElementById('triToggleBtn').textContent = on ? '← Back to single view' : 'Synced 3-plane view';
+  if(on){
+    if(!sharedPoint) initSharedPoint();
+    renderAllTriPanes();
+  }
+}
+document.getElementById('triToggleBtn').onclick = () => setTriActive(!triActive);
+['axial','coronal','sagittal'].forEach(wireTriPane);
 
 buildNav();
 const firstKey = groups["Cross-sections"][0];
