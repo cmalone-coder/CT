@@ -36,18 +36,24 @@ import os
 import numpy as np
 import trimesh
 
-# (source STL suffix, output basename, target face count after decimation).
-# Targets are a deliberate size/quality tradeoff, easy to re-tune by
-# re-running this script -- not a hard technical limit. The maxilla needs
-# the heaviest reduction by far (2,046,556 -> ~150,000, ~93%) since it
-# dwarfs everything else; the mandibular canal is a thin tube and gets
-# only light reduction so decimation doesn't collapse its shape.
+# (source STL suffix, output basename, target face count after decimation
+# -- None means keep full resolution, no decimation at all). Full
+# resolution is the default per explicit user request: this is the user's
+# own real DentalSegmentator output and they want it embedded faithfully,
+# not simplified. Raw STL is a wasteful format for this though (every
+# triangle repeats its own 3 vertices rather than sharing an index
+# buffer), so even at full triangle count, re-exporting to indexed
+# binary GLB shrinks the file substantially with zero geometry loss --
+# this is what actually keeps the large structures under GitHub's 100MB
+# hard per-file limit (and avoids Git LFS, which doesn't reliably serve
+# real content through GitHub Pages -- it tends to serve the LFS pointer
+# text file instead of the binary unless extra proxying is set up).
 STRUCTURES = [
-    ("Maxilla & Upper Skull", "maxilla_upper_skull", 150_000),
-    ("Mandible", "mandible", 80_000),
-    ("Lower Teeth", "lower_teeth", 40_000),
-    ("Upper Teeth", "upper_teeth", 30_000),
-    ("Mandibular canal", "mandibular_canal", 10_000),
+    ("Maxilla & Upper Skull", "maxilla_upper_skull", None),
+    ("Mandible", "mandible", None),
+    ("Lower Teeth", "lower_teeth", None),
+    ("Upper Teeth", "upper_teeth", None),
+    ("Mandibular canal", "mandibular_canal", None),
 ]
 
 
@@ -96,11 +102,11 @@ def main():
         mesh = trimesh.load(stl_path)
         print(f"  raw: {len(mesh.vertices)} verts, {len(mesh.faces)} faces")
 
-        if len(mesh.faces) > target_faces:
+        if target_faces is not None and len(mesh.faces) > target_faces:
             mesh = mesh.simplify_quadric_decimation(face_count=target_faces)
             print(f"  decimated: {len(mesh.vertices)} verts, {len(mesh.faces)} faces")
         else:
-            print(f"  already under target ({target_faces}), skipping decimation")
+            print(f"  keeping full resolution (no decimation)")
 
         if len(mesh.faces) == 0:
             raise RuntimeError(f"{stl_name}: decimation produced an empty mesh -- target_faces too low?")

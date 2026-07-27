@@ -210,7 +210,7 @@
       <div class="layer-btns">
         <div class="toggle-row">
           <span class="toggle-label"><span class="swatch" style="background:#e8d2a0"></span>Bone</span>
-          <div class="switch on" id="toggle-bone"><div class="knob"></div></div>
+          <div class="switch" id="toggle-bone"><div class="knob"></div></div>
         </div>
         <div class="toggle-row" style="margin-top:8px;">
           <span class="toggle-label"><span class="swatch" style="background:#298bff"></span>Metal hardware</span>
@@ -247,7 +247,7 @@
       <div class="layer-btns">
         <div class="toggle-row">
           <span class="toggle-label"><span class="swatch" style="background:#d8c090"></span>Maxilla &amp; upper skull</span>
-          <div class="switch" id="toggle-mesh-maxilla_upper_skull"><div class="knob"></div></div>
+          <div class="switch on" id="toggle-mesh-maxilla_upper_skull"><div class="knob"></div></div>
         </div>
         <div class="slider-row" style="margin-top:4px;">
           <input type="range" id="opacity-mesh-maxilla_upper_skull" min="5" max="100" value="90">
@@ -256,7 +256,7 @@
 
         <div class="toggle-row" style="margin-top:12px;">
           <span class="toggle-label"><span class="swatch" style="background:#c8a068"></span>Mandible</span>
-          <div class="switch" id="toggle-mesh-mandible"><div class="knob"></div></div>
+          <div class="switch on" id="toggle-mesh-mandible"><div class="knob"></div></div>
         </div>
         <div class="slider-row" style="margin-top:4px;">
           <input type="range" id="opacity-mesh-mandible" min="5" max="100" value="90">
@@ -265,7 +265,7 @@
 
         <div class="toggle-row" style="margin-top:12px;">
           <span class="toggle-label"><span class="swatch" style="background:#f2ecd8"></span>Upper teeth</span>
-          <div class="switch" id="toggle-mesh-upper_teeth"><div class="knob"></div></div>
+          <div class="switch on" id="toggle-mesh-upper_teeth"><div class="knob"></div></div>
         </div>
         <div class="slider-row" style="margin-top:4px;">
           <input type="range" id="opacity-mesh-upper_teeth" min="5" max="100" value="90">
@@ -274,7 +274,7 @@
 
         <div class="toggle-row" style="margin-top:12px;">
           <span class="toggle-label"><span class="swatch" style="background:#e0d4b0"></span>Lower teeth</span>
-          <div class="switch" id="toggle-mesh-lower_teeth"><div class="knob"></div></div>
+          <div class="switch on" id="toggle-mesh-lower_teeth"><div class="knob"></div></div>
         </div>
         <div class="slider-row" style="margin-top:4px;">
           <input type="range" id="opacity-mesh-lower_teeth" min="5" max="100" value="90">
@@ -283,7 +283,7 @@
 
         <div class="toggle-row" style="margin-top:12px;">
           <span class="toggle-label"><span class="swatch" style="background:#ff5a5a"></span>Mandibular canal</span>
-          <div class="switch" id="toggle-mesh-mandibular_canal"><div class="knob"></div></div>
+          <div class="switch on" id="toggle-mesh-mandibular_canal"><div class="knob"></div></div>
         </div>
         <div class="slider-row" style="margin-top:4px;">
           <input type="range" id="opacity-mesh-mandibular_canal" min="5" max="100" value="90">
@@ -553,7 +553,7 @@ const uniforms = {
   uBoneOpacity: { value: 1.0 },
   uMetalOpacity: { value: 1.0 },
   uSoftOpacity: { value: 0.65 },
-  uBoneVisible: { value: 1.0 },
+  uBoneVisible: { value: 0.0 },
   uMetalVisible: { value: 1.0 },
   uSoftVisible: { value: 0.0 },
   uClipEnabled: { value: 0.0 },
@@ -796,7 +796,7 @@ controls.addEventListener('end', () => { uniforms.uTargetStep.value = 0.35; });
 // ---------------------------------------------------------------------
 const STRUCTURES = ['bone', 'metal', 'soft_tissue'];
 const UNIFORM_KEY = { bone:'Bone', metal:'Metal', soft_tissue:'Soft' };
-const visibleState = { bone:true, metal:true, soft_tissue:false };
+const visibleState = { bone:false, metal:true, soft_tissue:false };
 
 STRUCTURES.forEach(name => {
   const toggle = document.getElementById('toggle-' + name);
@@ -870,7 +870,7 @@ async function loadSegmentedMesh(struct){
         });
       }
     });
-    mesh.visible = false;
+    mesh.visible = true;
     scene.add(mesh);
     wireMeshControls(struct.key, mesh);
   } catch(e) {
