@@ -248,6 +248,17 @@
     </div>
 
     <div class="control-group">
+      <label>Imaging report findings</label>
+      <div class="toggle-row">
+        <span class="toggle-label"><span class="swatch" style="background:#ff2d95"></span>Show markers</span>
+        <div class="switch" id="toggle-findings"><div class="knob"></div></div>
+      </div>
+      <div class="legend-note">
+        Click a marker to see the matching excerpt from the imaging report. Only includes findings whose 3D location has been directly verified against this scan's own segmented data — not guessed from the report's image/series references alone (those turned out not to reliably map to this export). Currently just the ORIF hardware; more will be added only as they're similarly verified.
+      </div>
+    </div>
+
+    <div class="control-group">
       <label>Image</label>
       <div class="toggle-row">
         <span class="toggle-label">Invert colors</span>
@@ -521,6 +532,50 @@ function addMarkerLine(a, b){
   markerGroup.add(line);
 }
 
+// ---------------------------------------------------------------------
+// Imaging report findings -- markers at 3D locations directly verified
+// against this scan's own segmented data, not guessed from the report's
+// "image N of series M" references alone (tried that this session for a
+// couple of findings; it didn't reliably map to slices in this export,
+// so it's not trustworthy enough to place a marker from that alone).
+// Currently just the ORIF hardware: its real voxel centroid (not a
+// bounding-box midpoint -- checked, the bbox center actually landed in
+// empty space next to the hardware, not on it) from this project's own
+// metal segmentation, run through the same display-space transform used
+// throughout this viewer. More will be added only once similarly
+// verified, not guessed.
+// ---------------------------------------------------------------------
+const FINDINGS = [
+  {
+    position: { x: 25.83, y: 2.56, z: 32.64 },
+    label: 'ORIF hardware',
+    excerpt: 'ORIF plate in the anterior wall of the right maxillary sinus. Total of 3 rectangular ossific densities within the right maxillary sinus, 1 of which protrudes into the right nasal cavity.',
+  },
+];
+const findingsGroup = new THREE.Group();
+findingsGroup.visible = false;
+scene.add(findingsGroup);
+const findingMeshes = [];
+
+FINDINGS.forEach(f => {
+  const geo = new THREE.SphereGeometry(Math.max(sceneScale * 0.012, 1.2), 16, 16);
+  const mat = new THREE.MeshBasicMaterial({ color:0xff2d95, transparent:true, opacity:0.85, depthTest:false });
+  const marker = new THREE.Mesh(geo, mat);
+  marker.position.set(f.position.x, f.position.y, f.position.z);
+  marker.renderOrder = 998;
+  marker.userData.finding = f;
+  findingsGroup.add(marker);
+  findingMeshes.push(marker);
+});
+
+const findingsToggle = document.getElementById('toggle-findings');
+findingsToggle.onclick = () => {
+  const on = !findingsGroup.visible;
+  findingsGroup.visible = on;
+  findingsToggle.classList.toggle('on', on);
+  toolResult.textContent = on ? 'Click a marker to see the matching report excerpt.' : MODE_HINT[toolMode];
+};
+
 const raycaster = new THREE.Raycaster();
 const pointerNDC = new THREE.Vector2();
 
@@ -553,8 +608,23 @@ renderer.domElement.addEventListener('pointerdown', e => { pointerDownAt = { x:e
 renderer.domElement.addEventListener('pointerup', e => {
   const start = pointerDownAt;
   pointerDownAt = null;
-  if(toolMode === 'rotate' || !start) return;
+  if(!start) return;
   if(Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4) return;
+
+  if(findingsGroup.visible){
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointerNDC, camera);
+    const findingHit = raycaster.intersectObjects(findingMeshes, false);
+    if(findingHit.length){
+      const f = findingHit[0].object.userData.finding;
+      toolResult.innerHTML = `<b style="color:#ff2d95">${f.label}</b><br>${f.excerpt}`;
+      return;
+    }
+  }
+
+  if(toolMode === 'rotate') return;
   handleToolClick(e.clientX, e.clientY);
 });
 
