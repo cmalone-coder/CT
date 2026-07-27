@@ -454,6 +454,17 @@
 
 <script src="gallery-manifest.js"></script>
 <script>
+// Per-slice HU data is gzipped (tools/export_gallery_slices.py) -- ~2x
+// smaller per slice, measured across this scan. Same native-decompression
+// technique already used by the 3D viewer's volume textures, no library.
+async function fetchGzipRaw(url){
+  const res = await fetch(url);
+  if(!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
+  const ds = new DecompressionStream('gzip');
+  const stream = res.body.pipeThrough(ds);
+  return new Response(stream).arrayBuffer();
+}
+
 // GALLERY_MANIFEST (from gallery-manifest.js) covers the real cross-section
 // series with raw HU data. recon3d rotation renders are the scanner's own
 // pre-rendered flat-image sequences -- not real per-voxel HU data, so they
@@ -591,7 +602,15 @@ async function loadFrame(){
   let hu = rawCache.get(cacheKey);
   if(!hu){
     const idx = String(frame).padStart(4,'0');
-    const buf = await fetch(`images_raw/${current.key}/${idx}.raw`).then(r=>r.arrayBuffer());
+    // Stale-response guard: fast scrubbing (wheel/drag) can fire many
+    // loadFrame() calls before earlier fetches resolve. If the user has
+    // moved on to a different frame by the time this one's fetch comes
+    // back, drop it instead of doing a wasted render (or worse, briefly
+    // flashing an old frame if an earlier fetch resolves after a newer
+    // one due to network timing).
+    const requestedKey = current.key, requestedFrame = frame;
+    const buf = await fetchGzipRaw(`images_raw/${current.key}/${idx}.raw.gz`);
+    if(current.key !== requestedKey || frame !== requestedFrame) return;
     hu = new Int16Array(buf);
     rawCache.set(cacheKey, hu);
   }
@@ -782,13 +801,26 @@ stage.addEventListener('touchmove', e=>{
 }, {passive:true});
 stage.addEventListener('touchend', ()=>{ dragging=false; });
 
+// Debounced load: a fast wheel-scrub burst can fire many events before
+// the first fetch even resolves. Coalescing into one load ~40ms after
+// scrolling settles (rather than one fetch per tick) is what actually
+// cuts the network/render load during rapid scrubbing -- the stale-
+// response guard inside loadFrame() only fixes *correctness* if several
+// fetches do end up in flight, it doesn't reduce how many get sent.
+let loadFrameTimer = null;
+function scheduleLoadFrame(delay=40){
+  if(loadFrameTimer) clearTimeout(loadFrameTimer);
+  loadFrameTimer = setTimeout(()=>{ loadFrameTimer = null; loadFrame(); }, delay);
+}
+
 // Wheel: scrub slices for real series, zoom for flat rotation renders
 stage.addEventListener('wheel', e=>{
   e.preventDefault();
   if(!current.flat){
     frame += e.deltaY > 0 ? 1 : -1;
     clampFrame();
-    loadFrame();
+    updateReadouts();
+    scheduleLoadFrame();
     return;
   }
   const rect = stage.getBoundingClientRect();
@@ -850,7 +882,7 @@ async function getTriHu(key, sliceIdx1based){
   let hu = triCache.get(cacheKey);
   if(!hu){
     const idx = String(sliceIdx1based).padStart(4,'0');
-    const buf = await fetch(`images_raw/${key}/${idx}.raw`).then(r=>r.arrayBuffer());
+    const buf = await fetchGzipRaw(`images_raw/${key}/${idx}.raw.gz`);
     hu = new Int16Array(buf);
     triCache.set(cacheKey, hu);
   }

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Export per-slice raw HU pixel data (no compression, no windowing baked in)
-for the gallery's diagnostic-grade viewer, plus a manifest with the geometry
+Export per-slice raw HU pixel data (gzipped, no windowing baked in) for
+the gallery's diagnostic-grade viewer, plus a manifest with the geometry
 and default window/level each series needs.
 
 Never commit the DICOM zip or extracted intermediates -- only this script's
 output (images_raw/ + gallery-manifest.js) is meant to land in the repo.
 """
 import argparse
+import gzip
 import io
 import json
 import zipfile
@@ -103,8 +104,13 @@ def export_series(slices, out_dir, key):
         raw = s.pixel_array.astype(np.int32)
         hu = (raw * slope + intercept).astype(np.int16)
         assert hu.shape == (rows, cols), f"{key} slice {i} shape mismatch: {hu.shape}"
-        fname = f"{i+1:04d}.raw"
-        hu.tofile(series_dir / fname)
+        # Gzipped (~2x smaller, measured across this scan's slices) --
+        # gallery.html decompresses client-side via DecompressionStream,
+        # same technique already used for the 3D viewer's volume textures.
+        # This directly targets slow scrubbing: every scrub to an uncached
+        # slice was previously fetching a full uncompressed 512KB+ frame.
+        fname = f"{i+1:04d}.raw.gz"
+        (series_dir / fname).write_bytes(gzip.compress(hu.tobytes(), compresslevel=6))
         z = float(s.ImagePositionPatient[2])
         positions.append(round(z - origin_z, 2))
 

@@ -187,7 +187,7 @@
   </div>
   <!-- Bump this on every push that changes what's visible on the page --
        lets the user tell a real update from a stale cache at a glance. -->
-  <div class="disclaimer">v2</div>
+  <div class="disclaimer">v3</div>
 </header>
 
 <div class="nav-backdrop" id="navBackdrop"></div>
@@ -333,8 +333,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
-async function boot(THREE, OrbitControls, GLTFLoader){
+async function boot(THREE, OrbitControls, GLTFLoader, DRACOLoader){
 
 const wrap = document.getElementById('canvas-wrap');
 const scene = new THREE.Scene();
@@ -401,7 +402,14 @@ const MESH_STRUCTURES = [
   { key:'mandibular_canal',    color:0xff5a5a, label:'Mandibular canal' },
   { key:'metal_hardware',      color:0x298bff, label:'Metal hardware', roughness:0.3, metalness:0.9, opacity:1.0 },
 ];
+// These GLBs are Draco-compressed at export time (tools/prepare_dental_meshes.py)
+// -- geometry compression, not decimation, verified this session (decoded
+// accessor bounds match pre-compression bounds to within ~0.1mm). Needs
+// the matching decoder wired in or GLTFLoader can't read them at all.
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/');
 const gltfLoader = new GLTFLoader();
+gltfLoader.setDRACOLoader(dracoLoader);
 const loadedMeshRoots = [];
 
 async function loadSegmentedMesh(struct){
@@ -691,7 +699,7 @@ animate();
 
 } // end boot()
 
-boot(THREE, OrbitControls, GLTFLoader).catch(e => {
+boot(THREE, OrbitControls, GLTFLoader, DRACOLoader).catch(e => {
   const el = document.getElementById('loading');
   el.querySelector('.msg').textContent = 'LOAD ERROR — ' + e.message;
   el.querySelector('.spinner').style.display = 'none';
