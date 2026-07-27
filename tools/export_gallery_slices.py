@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Export per-slice raw HU pixel data (gzipped, no windowing baked in) for
-the gallery's diagnostic-grade viewer, plus a manifest with the geometry
+Export per-slice raw HU pixel data (no compression, no windowing baked in)
+for the gallery's diagnostic-grade viewer, plus a manifest with the geometry
 and default window/level each series needs.
 
 Never commit the DICOM zip or extracted intermediates -- only this script's
 output (images_raw/ + gallery-manifest.js) is meant to land in the repo.
 """
 import argparse
-import gzip
 import io
 import json
 import zipfile
@@ -99,20 +98,29 @@ def export_series(slices, out_dir, key):
     series_dir.mkdir(parents=True, exist_ok=True)
 
     positions = []
-    origin_z = float(slices[0].ImagePositionPatient[2])
     for i, s in enumerate(slices):
         raw = s.pixel_array.astype(np.int32)
         hu = (raw * slope + intercept).astype(np.int16)
         assert hu.shape == (rows, cols), f"{key} slice {i} shape mismatch: {hu.shape}"
-        # Gzipped (~2x smaller, measured across this scan's slices) --
-        # gallery.html decompresses client-side via DecompressionStream,
-        # same technique already used for the 3D viewer's volume textures.
-        # This directly targets slow scrubbing: every scrub to an uncached
-        # slice was previously fetching a full uncompressed 512KB+ frame.
-        fname = f"{i+1:04d}.raw.gz"
-        (series_dir / fname).write_bytes(gzip.compress(hu.tobytes(), compresslevel=6))
-        z = float(s.ImagePositionPatient[2])
-        positions.append(round(z - origin_z, 2))
+        # Plain, uncompressed -- gzip was tried (halves the per-slice size)
+        # but the user reported scrubbing felt choppier with it, not
+        # smoother, and was explicit that smoothness matters more than
+        # file size here. Reverted rather than chase a compression
+        # approach that made the actual experience worse.
+        fname = f"{i+1:04d}.raw"
+        (series_dir / fname).write_bytes(hu.tobytes())
+        # Position along THIS series' own real slice-stacking axis
+        # (normal), not a raw Z-difference. Those are only the same
+        # thing for an axial series (whose normal is approximately the
+        # Z/S axis) -- for coronal/sagittal, whose normal points mostly
+        # along other axes, "z - origin_z" was capturing a few mm of
+        # incidental drift instead of the true ~100mm+ span across the
+        # series. Confirmed this was silently wrong: a sagittal series'
+        # own reported positions barely moved (0 to 12.68mm across all
+        # 138 slices) even though its normal is almost entirely along L.
+        ipp = np.array([float(x) for x in s.ImagePositionPatient])
+        pos_along_normal = float(np.dot(ipp - origin, normal))
+        positions.append(round(pos_along_normal, 2))
 
     return {
         "key": key,

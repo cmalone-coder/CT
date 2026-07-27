@@ -218,6 +218,16 @@
     border-radius:3px;
   }
 
+  .side-label{
+    position:absolute; top:50%; transform:translateY(-50%);
+    font-family:var(--mono); font-weight:600; font-size:22px;
+    color:var(--amber); opacity:0.8; letter-spacing:0.04em;
+    text-shadow:0 0 8px rgba(0,0,0,0.8); pointer-events:none;
+    display:none;
+  }
+  .side-label-left{left:16px;}
+  .side-label-right{right:16px;}
+
   .tri-grid{
     flex:1; display:flex; gap:2px; background:var(--panel-line);
     overflow:hidden; min-height:0;
@@ -357,7 +367,7 @@
   <div class="disclaimer">
     <!-- Bump this on every push that changes what's visible on this page --
          lets the user tell a real update from a stale cache at a glance. -->
-    v1<br>
+    v2<br>
     All identifying data (name, DOB, MRN, accession #) has been stripped from every image and file.<br>
     For informational discussion only — not a diagnostic read.
   </div>
@@ -391,6 +401,8 @@
       <div class="series-label" id="seriesLabel"></div>
       <div class="frame-index" id="frameIndex"></div>
       <div class="zoom-readout" id="zoomReadout">100%</div>
+      <div class="side-label side-label-left" id="sideLabelLeft"></div>
+      <div class="side-label side-label-right" id="sideLabelRight"></div>
       <div class="hint" id="hint"><span class="dot"></span><span id="hintText">Wheel to scrub · drag to zoom · shift-drag to pan</span></div>
     </div>
     <div class="scrub">
@@ -457,17 +469,6 @@
 
 <script src="gallery-manifest.js"></script>
 <script>
-// Per-slice HU data is gzipped (tools/export_gallery_slices.py) -- ~2x
-// smaller per slice, measured across this scan. Same native-decompression
-// technique already used by the 3D viewer's volume textures, no library.
-async function fetchGzipRaw(url){
-  const res = await fetch(url);
-  if(!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
-  const ds = new DecompressionStream('gzip');
-  const stream = res.body.pipeThrough(ds);
-  return new Response(stream).arrayBuffer();
-}
-
 // GALLERY_MANIFEST (from gallery-manifest.js) covers the real cross-section
 // series with raw HU data. recon3d rotation renders are the scanner's own
 // pre-rendered flat-image sequences -- not real per-voxel HU data, so they
@@ -554,6 +555,7 @@ function selectSeries(key){
     document.getElementById('wwVal').textContent = Math.round(ww);
   }
 
+  updateSideLabels();
   resetView();
   loadFrame();
   if(window.innerWidth <= 820){
@@ -612,7 +614,7 @@ async function loadFrame(){
     // flashing an old frame if an earlier fetch resolves after a newer
     // one due to network timing).
     const requestedKey = current.key, requestedFrame = frame;
-    const buf = await fetchGzipRaw(`images_raw/${current.key}/${idx}.raw.gz`);
+    const buf = await fetch(`images_raw/${current.key}/${idx}.raw`).then(r=>r.arrayBuffer());
     if(current.key !== requestedKey || frame !== requestedFrame) return;
     hu = new Int16Array(buf);
     rawCache.set(cacheKey, hu);
@@ -671,6 +673,41 @@ function updateReadouts(){
   // zoom % is relative to native 1:1 resolution, not to the fit view
   document.getElementById('zoomReadout').textContent = Math.round(zoomLevel*100) + '%';
   document.getElementById('slider').value = frame;
+  updateSideLabels();
+}
+
+// R/L side indicators. Axial and coronal each show BOTH sides of the
+// patient in one image, so the label is a fixed radiological-convention
+// pair regardless of slice (patient's right on the image's left edge,
+// as if looking up at them from their feet, or facing them head-on for
+// coronal -- the same convention already established and verified
+// elsewhere in this project). A single sagittal slice is a fundamentally
+// different case -- it IS one specific left-right depth, not a span of
+// both -- so instead of a fixed pair it shows one dynamic label for
+// whichever side the current slice actually sits on, computed from this
+// series' own verified geometry (originMm + positionsMm along its own
+// normal, projected onto the real L axis), not assumed from slice index.
+function updateSideLabels(){
+  const left = document.getElementById('sideLabelLeft');
+  const right = document.getElementById('sideLabelRight');
+  left.style.display = 'none';
+  right.style.display = 'none';
+  if(!current || current.flat) return;
+
+  if(current.key.startsWith('axial') || current.key.startsWith('coronal')){
+    left.textContent = 'R';
+    right.textContent = 'L';
+    left.style.display = 'block';
+    right.style.display = 'block';
+    return;
+  }
+
+  if(current.key.startsWith('sagittal') && current.originMm && current.normal){
+    const posAlongNormal = current.positionsMm ? (current.positionsMm[frame-1] || 0) : 0;
+    const lCoord = current.originMm[0] + posAlongNormal * current.normal[0];
+    right.textContent = lCoord > 0 ? 'L' : 'R';
+    right.style.display = 'block';
+  }
 }
 
 function formatPosition(){
@@ -891,7 +928,7 @@ async function getTriHu(key, sliceIdx1based){
   let hu = triCache.get(cacheKey);
   if(!hu){
     const idx = String(sliceIdx1based).padStart(4,'0');
-    const buf = await fetchGzipRaw(`images_raw/${key}/${idx}.raw.gz`);
+    const buf = await fetch(`images_raw/${key}/${idx}.raw`).then(r=>r.arrayBuffer());
     hu = new Int16Array(buf);
     triCache.set(cacheKey, hu);
   }
