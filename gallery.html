@@ -801,15 +801,21 @@ stage.addEventListener('touchmove', e=>{
 }, {passive:true});
 stage.addEventListener('touchend', ()=>{ dragging=false; });
 
-// Debounced load: a fast wheel-scrub burst can fire many events before
-// the first fetch even resolves. Coalescing into one load ~40ms after
-// scrolling settles (rather than one fetch per tick) is what actually
-// cuts the network/render load during rapid scrubbing -- the stale-
-// response guard inside loadFrame() only fixes *correctness* if several
-// fetches do end up in flight, it doesn't reduce how many get sent.
+// Load, debounced -- but only for frames that actually need a network
+// fetch. The first version of this delayed *every* frame change by
+// 40ms, including ones already sitting in rawCache that used to render
+// instantly -- that's what made scrolling feel laggy instead of
+// seamless. Now: already-cached frames render immediately, every time,
+// same as before any of this session's changes; the debounce only
+// kicks in for a frame that isn't cached yet, so a fast scrub burst
+// through *new* territory doesn't fire a fetch per tick.
 let loadFrameTimer = null;
 function scheduleLoadFrame(delay=40){
-  if(loadFrameTimer) clearTimeout(loadFrameTimer);
+  if(loadFrameTimer){ clearTimeout(loadFrameTimer); loadFrameTimer = null; }
+  if(rawCache.has(current.key + '/' + frame)){
+    loadFrame();
+    return;
+  }
   loadFrameTimer = setTimeout(()=>{ loadFrameTimer = null; loadFrame(); }, delay);
 }
 
