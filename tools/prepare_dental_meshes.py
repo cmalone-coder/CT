@@ -113,6 +113,16 @@ def main():
 
         mesh.apply_transform(M)
         mesh.fix_normals()
+        # trimesh's glb exporter only includes a NORMAL accessor if
+        # vertex_normals has actually been computed/cached first -- it
+        # does NOT compute them automatically at export time. Confirmed
+        # by direct inspection: without this, the exported GLB had only
+        # a POSITION attribute, no NORMAL at all, which is why the live
+        # viewer rendered every part as a single flat, shading-less
+        # color (MeshStandardMaterial has nothing to light against) with
+        # black patches in places (undefined per-face behavior with no
+        # normal data) -- not a data or transform problem, an export gap.
+        _ = mesh.vertex_normals
 
         glb_bytes = mesh.export(file_type="glb")
         out_path = os.path.join(args.out_dir, f"{out_name}.glb.gz")

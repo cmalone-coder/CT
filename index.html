@@ -105,17 +105,6 @@
     border-top:1px solid var(--panel-line); padding-top:16px; margin-top:auto;
   }
   .hint-block .k{color:var(--amber);}
-  .legend{display:flex; flex-direction:column; gap:8px;}
-  .legend-row{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-dim);}
-  .legend-swatch{width:22px; height:10px; border-radius:2px; flex-shrink:0; display:inline-block;}
-  .legend-bar{
-    height:12px; border-radius:2px;
-    background:linear-gradient(90deg, #8a4a1e 0%, #d8a54a 30%, #f0e6d2 65%, #ffffff 100%);
-  }
-  .legend-ticks{
-    display:flex; justify-content:space-between;
-    font-family:var(--mono); font-size:9.5px; color:var(--text-dim); margin-top:3px;
-  }
   .legend-note{
     font-size:10.5px; color:var(--text-dim); line-height:1.5; margin-top:8px;
   }
@@ -193,11 +182,11 @@
   <div class="brand">
     <button id="navToggle" class="nav-toggle" aria-label="Toggle controls">☰</button>
     <span class="mark">3D</span>
-    <h1>Volumetric Reconstruction — De-identified</h1>
+    <h1>3D Reconstruction — De-identified</h1>
     <a href="gallery.html" class="nav-link">View original slices →</a>
   </div>
   <div class="disclaimer">
-    Direct volume rendering (GPU raymarching) of the raw CT density field for bone/metal/soft tissue — no surface mesh is extracted for that layer, so there's no decimation, no marching-cubes faceting, and no mesh debris to introduce artifacts. Bone (including teeth, rendered as one continuous dense structure) comes from density alone; metal hardware is highlighted using the validated segmentation label. An optional "Segmented parts" layer adds decimated meshes from an independent deep-learning segmentation (DentalSegmentator, run separately in 3D Slicer) for individually selectable maxilla/mandible/teeth/nerve-canal.<br>
+    Real segmented-anatomy meshes (Maxilla &amp; upper skull, Mandible, Upper teeth, Lower teeth, Mandibular canal) — independently segmented by the DentalSegmentator deep-learning model, run directly in 3D Slicer, not this project's own density-threshold pipeline. Full resolution, no decimation.<br>
     For informational discussion only — not a diagnostic tool.
   </div>
 </header>
@@ -206,44 +195,7 @@
 <div class="layout">
   <nav id="sideNav">
     <div class="control-group">
-      <label>Structures</label>
-      <div class="layer-btns">
-        <div class="toggle-row">
-          <span class="toggle-label"><span class="swatch" style="background:#e8d2a0"></span>Bone</span>
-          <div class="switch" id="toggle-bone"><div class="knob"></div></div>
-        </div>
-        <div class="toggle-row" style="margin-top:8px;">
-          <span class="toggle-label"><span class="swatch" style="background:#298bff"></span>Metal hardware</span>
-          <div class="switch on" id="toggle-metal"><div class="knob"></div></div>
-        </div>
-        <div class="toggle-row" style="margin-top:8px;">
-          <span class="toggle-label"><span class="swatch" style="background:#c98a6b"></span>Soft tissue</span>
-          <div class="switch" id="toggle-soft_tissue"><div class="knob"></div></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="control-group">
-      <label>Opacity</label>
-      <div class="slider-row">
-        <span class="val-label">Bone</span>
-        <input type="range" id="opacity-bone" min="5" max="100" value="100">
-        <span class="val" id="opacityVal-bone">100%</span>
-      </div>
-      <div class="slider-row" style="margin-top:8px;">
-        <span class="val-label">Metal</span>
-        <input type="range" id="opacity-metal" min="5" max="100" value="100">
-        <span class="val" id="opacityVal-metal">100%</span>
-      </div>
-      <div class="slider-row" style="margin-top:8px;">
-        <span class="val-label">Soft tissue</span>
-        <input type="range" id="opacity-soft_tissue" min="5" max="100" value="65">
-        <span class="val" id="opacityVal-soft_tissue">65%</span>
-      </div>
-    </div>
-
-    <div class="control-group">
-      <label>Segmented parts (DentalSegmentator)</label>
+      <label>Structures (DentalSegmentator)</label>
       <div class="layer-btns">
         <div class="toggle-row">
           <span class="toggle-label"><span class="swatch" style="background:#d8c090"></span>Maxilla &amp; upper skull</span>
@@ -290,24 +242,8 @@
           <span class="val" id="opacityVal-mesh-mandibular_canal">90%</span>
         </div>
       </div>
-      <div class="legend-note" style="margin-top:10px;">
-        Independently segmented by the DentalSegmentator deep-learning model (run directly in 3D Slicer, not this project's own density-threshold pipeline) — a separate, explicitly-labeled mesh layer, decimated for web delivery. Occupies the same physical space as the density-rendered Bone layer above; turn Bone off to avoid seeing both at once.
-      </div>
-    </div>
-
-    <div class="control-group">
-      <label>Bone density (HU)</label>
-      <div class="legend">
-        <div class="legend-bar"></div>
-        <div class="legend-ticks">
-          <span>p5</span><span>~30%</span><span>~65%</span><span>p99.5</span>
-        </div>
-        <div class="legend-row" style="margin-top:8px;">
-          <span class="legend-swatch" style="background:#298bff"></span>metal hardware (segmentation label)
-        </div>
-        <div class="legend-note">
-          Bone (including teeth — rendered as one continuous dense structure, not separated) comes directly from density: the renderer marches a ray through the real voxel grid for every pixel and fades opacity in smoothly above the bone density floor, calibrated from this scan's own bone statistics. Metal hardware is the one structure still driven by the segmentation pipeline's label (density thresholds, connected components, and watershed), since that classification was independently validated against the confirmed surgical plate.
-        </div>
+      <div class="legend-note">
+        Independently segmented by the DentalSegmentator deep-learning model, run directly in 3D Slicer — not this project's own density-threshold pipeline. Full resolution, no decimation.
       </div>
     </div>
 
@@ -372,7 +308,7 @@
 
   <main>
     <div id="canvas-wrap">
-      <div id="loading"><div class="spinner"></div><div class="msg">LOADING VOLUME DATA…</div></div>
+      <div id="loading"><div class="spinner"></div><div class="msg">LOADING SEGMENTED MODEL…</div></div>
     </div>
   </main>
 </div>
@@ -409,32 +345,17 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x131516);
 
 const camera = new THREE.PerspectiveCamera(45, wrap.clientWidth/wrap.clientHeight, 0.1, 5000);
-camera.position.set(0, 0, 350);
 
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(wrap.clientWidth, wrap.clientHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.localClippingEnabled = true;
 wrap.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
-controls.minDistance = 20;
-controls.maxDistance = 1200;
-
-// The raymarch shader below does all its lighting per-sample inside the
-// fragment shader -- there are otherwise zero real THREE.Light objects in
-// this scene. The segmented-part meshes (real THREE.Mesh geometry, added
-// further down) need actual scene lights or they render unlit/black.
-// Mirrors the shader's own camera-following "headlamp" concept: a
-// directional light positioned at the camera, aimed at the volume center
-// (the default light target), updated every frame in animate() below.
-const meshKeyLight = new THREE.DirectionalLight(0xffffff, 1.3);
-scene.add(meshKeyLight);
-scene.add(meshKeyLight.target);
-const meshAmbLight = new THREE.AmbientLight(0xffffff, 0.45);
-scene.add(meshAmbLight);
 
 function showError(msg){
   const el = document.getElementById('loading');
@@ -442,14 +363,18 @@ function showError(msg){
   el.querySelector('.spinner').style.display = 'none';
 }
 
-// ---------------------------------------------------------------------
-// Load + decompress the volume. Two channels (see
-// tools/export_volume_texture.py): HU (windowed to 8 bits, needs linear
-// filtering so the raymarcher gets a smooth continuous field) and label
-// (the segmentation classes, needs nearest filtering -- interpolating
-// between class IDs is meaningless). gzip via the native
-// DecompressionStream API -- no bundled library needed.
-// ---------------------------------------------------------------------
+// Real scene lighting -- these are actual mesh surfaces now (no raymarch
+// shader doing its own per-sample lighting), so they need real lights or
+// they'd render unlit/black. Camera-following "headlamp": a directional
+// light positioned at the camera, aimed at the model's center (set once
+// the model's bounding box is known, below), updated every frame in
+// animate() so it always lights whatever's currently facing the viewer.
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.3);
+scene.add(keyLight);
+scene.add(keyLight.target);
+const ambLight = new THREE.AmbientLight(0xffffff, 0.45);
+scene.add(ambLight);
+
 async function fetchGzip(url){
   const res = await fetch(url);
   if(!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
@@ -458,386 +383,75 @@ async function fetchGzip(url){
   return new Response(stream).arrayBuffer();
 }
 
-let meta, huData, labelData;
+// ---------------------------------------------------------------------
+// Segmented-anatomy mesh parts -- the user's own Slicer DentalSegmentator
+// output, prepared by tools/prepare_dental_meshes.py (full resolution,
+// no decimation; that script bakes the coordinate transform in at export
+// time -- verified against this scan's own HU data before shipping, see
+// its docstring -- so these load directly into a consistent physical
+// coordinate space with no further transform needed here). This is the
+// entire visible model now: there is no separate density-rendered volume
+// layer, and no assumed/inferred structures -- only what's actually
+// present in these 5 files.
+// ---------------------------------------------------------------------
+const MESH_STRUCTURES = [
+  { key:'maxilla_upper_skull', color:0xd8c090, label:'Maxilla & upper skull' },
+  { key:'mandible',            color:0xc8a068, label:'Mandible' },
+  { key:'upper_teeth',         color:0xf2ecd8, label:'Upper teeth' },
+  { key:'lower_teeth',         color:0xe0d4b0, label:'Lower teeth' },
+  { key:'mandibular_canal',    color:0xff5a5a, label:'Mandibular canal' },
+];
+const gltfLoader = new GLTFLoader();
+const loadedMeshRoots = [];
+
+async function loadSegmentedMesh(struct){
+  const buf = await fetchGzip(`dental_meshes/${struct.key}.glb.gz`);
+  const gltf = await new Promise((resolve, reject) => gltfLoader.parse(buf, '', resolve, reject));
+  const mesh = gltf.scene;
+  mesh.traverse(obj => {
+    if(obj.isMesh){
+      obj.material = new THREE.MeshStandardMaterial({
+        color: struct.color, transparent:true, opacity:0.9, roughness:0.75, metalness:0.0,
+        side: THREE.DoubleSide,
+      });
+      obj.userData.structureLabel = struct.label;
+    }
+  });
+  mesh.visible = true;
+  scene.add(mesh);
+  loadedMeshRoots.push(mesh);
+  return { struct, mesh };
+}
+
+let loadedParts;
 try {
-  const metaRes = await fetch('volume/volume_meta.json');
-  if(!metaRes.ok) throw new Error(`volume_meta.json -> HTTP ${metaRes.status}`);
-  meta = await metaRes.json();
-  const [huBuf, labelBuf] = await Promise.all([
-    fetchGzip('volume/volume_hu.bin.gz'),
-    fetchGzip('volume/volume_label.bin.gz'),
-  ]);
-  huData = new Uint8Array(huBuf);
-  labelData = new Uint8Array(labelBuf);
-  const expected = meta.nslices * meta.nrows * meta.ncols;
-  if(huData.length !== expected || labelData.length !== expected){
-    throw new Error(`decompressed size mismatch (got ${huData.length}/${labelData.length}, expected ${expected})`);
-  }
+  loadedParts = await Promise.all(MESH_STRUCTURES.map(loadSegmentedMesh));
 } catch(e) {
-  showError('volume data — ' + e.message);
+  showError('segmented mesh data — ' + e.message);
   return;
 }
 
-const { nslices, nrows, ncols, rowSpacing, colSpacing, sliceThickness } = meta;
+// Camera/scene scale derived from the actual loaded geometry's combined
+// bounding box -- there's no volume metadata to read this from anymore,
+// so it comes directly from what was actually loaded.
+const combinedBox = new THREE.Box3();
+loadedMeshRoots.forEach(m => combinedBox.expandByObject(m));
+const boxSize = combinedBox.getSize(new THREE.Vector3());
+const boxCenter = combinedBox.getCenter(new THREE.Vector3());
+const sceneScale = Math.max(boxSize.x, boxSize.y, boxSize.z);
 
-// Physical box size in mm and the box<->texture mapping. Derived directly
-// from this pipeline's established axis-aligned display convention
-// (verified, not assumed, at export time: row_cosine=(1,0,0),
-// col_cosine=(0,1,0), normal=(0,0,1) -- see export_volume_texture.py) --
-// display X = -L (left-right), Y = S (superior-inferior), Z = -P
-// (anterior-posterior). The box mesh is authored directly in this
-// project's display-space mm, centered at the scene origin, so "local"
-// and "world" coordinates coincide (no extra transform to track):
-//   u (col fraction) = 0.5 - x/sizeX
-//   v (row fraction) = 0.5 - z/sizeZ
-//   w (slice fraction) = 0.5 + y/sizeY
-const sizeX = ncols * colSpacing;
-const sizeY = nslices * sliceThickness;
-const sizeZ = nrows * rowSpacing;
-const sceneScale = Math.max(sizeX, sizeY, sizeZ);
-
-camera.position.set(0, 0, sceneScale * 1.6);
+camera.position.set(boxCenter.x, boxCenter.y, boxCenter.z + sceneScale * 1.6);
 camera.near = sceneScale / 100;
 camera.far = sceneScale * 10;
 camera.updateProjectionMatrix();
-controls.target.set(0, 0, 0);
+controls.target.copy(boxCenter);
+controls.minDistance = sceneScale * 0.05;
+controls.maxDistance = sceneScale * 6;
 controls.update();
-
-const huTexture = new THREE.Data3DTexture(huData, ncols, nrows, nslices);
-huTexture.format = THREE.RedFormat;
-huTexture.type = THREE.UnsignedByteType;
-huTexture.minFilter = THREE.LinearFilter;
-huTexture.magFilter = THREE.LinearFilter;
-huTexture.wrapS = huTexture.wrapT = huTexture.wrapR = THREE.ClampToEdgeWrapping;
-huTexture.unpackAlignment = 1;
-huTexture.needsUpdate = true;
-
-const labelTexture = new THREE.Data3DTexture(labelData, ncols, nrows, nslices);
-labelTexture.format = THREE.RedFormat;
-labelTexture.type = THREE.UnsignedByteType;
-labelTexture.minFilter = THREE.NearestFilter;
-labelTexture.magFilter = THREE.NearestFilter;
-labelTexture.wrapS = labelTexture.wrapT = labelTexture.wrapR = THREE.ClampToEdgeWrapping;
-labelTexture.unpackAlignment = 1;
-labelTexture.needsUpdate = true;
-
-// HU calibration stops normalized into the [0,1] window space the 8-bit
-// texture actually stores, so the shader never needs to know the real HU
-// window bounds.
-function normHu(hu){ return (hu - meta.windowMinHu) / (meta.windowMaxHu - meta.windowMinHu); }
-
-// Bone density floor/top ramp -- computed once here, in real HU, and
-// shared by both the shader (normalized, via uBoneP5/uBoneTopNorm) and
-// the CPU-side click-to-identify/measurement pick logic below
-// (boneFloorHU), so the two can never silently drift apart. Proportional
-// to this scan's own bone-only calibration (boneP5/boneP995) rather than
-// independent hardcoded HU constants, so it self-calibrates if this
-// pipeline is ever rerun on different data. The top is deliberately only
-// 25% of the way to p99.5 -- ordinary solid cortical bone is nowhere near
-// the density ceiling, and teeth/resin/metal-adjacent voxels sit far
-// above it regardless, so they saturate to full opacity automatically
-// with no special-case code.
-const boneFloorHU = meta.boneP5;
-const boneTopHU = meta.boneP5 + 0.25 * (meta.boneP995 - meta.boneP5);
-
-const uniforms = {
-  uHuTex: { value: huTexture },
-  uLabelTex: { value: labelTexture },
-  uBoxSize: { value: new THREE.Vector3(sizeX, sizeY, sizeZ) },
-  uCameraLocal: { value: new THREE.Vector3() },
-  uBoneP5: { value: normHu(meta.boneP5) },
-  uBoneP995: { value: normHu(meta.boneP995) },
-  uBoneTopNorm: { value: normHu(boneTopHU) },
-  uSoftP5: { value: normHu(meta.softP5) },
-  uSoftP95: { value: normHu(meta.softP95) },
-  uBoneOpacity: { value: 1.0 },
-  uMetalOpacity: { value: 1.0 },
-  uSoftOpacity: { value: 0.65 },
-  uBoneVisible: { value: 0.0 },
-  uMetalVisible: { value: 1.0 },
-  uSoftVisible: { value: 0.0 },
-  uClipEnabled: { value: 0.0 },
-  uClipPlane: { value: new THREE.Vector4(0, 1, 0, 0) },
-  uLightDir: { value: new THREE.Vector3(0, 0, 1) },
-  uTargetStep: { value: 0.35 },  // mm; raised during camera drag, see the OrbitControls start/end handlers below
-};
-
-const vertexShader = `
-in vec3 position;
-out vec3 vLocalPos;
-uniform mat4 modelViewMatrix;
-uniform mat4 projectionMatrix;
-void main(){
-  vLocalPos = position;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}
-`;
-
-// Raymarching volume renderer. Ray-box intersection via the slab method
-// (robust whether the camera is outside or inside the box -- tNear is
-// clamped to 0 for the inside case). Step count is adaptive to the real
-// voxel pitch (not a fixed count over a variable-length ray, which
-// undersampled long rays and caused visible layering) and opacity
-// accumulates via the Beer-Lambert absorption law -- physically correct
-// and, critically, invariant to step size, so the render doesn't change
-// appearance if the step count/target is retuned later.
-//
-// Bone (and teeth -- deliberately not separated, they're just very dense
-// bone-colored material) is driven by density alone: a smooth ramp from
-// this scan's own bone-only p5 up to a modest fraction of its way to
-// p99.5, not by the segmentation's tooth/bone classification label. That
-// label boundary was never reliably separable by density in this scan
-// (front teeth are resin-restored, physically fused to adjacent bone
-// with no density valley between them) -- dropping the classification
-// requirement for the *rendered* bone map sidesteps that problem
-// entirely rather than trying to solve it. Metal keeps using its label
-// (independently validated against the confirmed surgical plate) as a
-// highlight layered on top, since that classification is trustworthy.
-const fragmentShader = `
-precision highp float;
-precision highp sampler3D;
-
-in vec3 vLocalPos;
-out vec4 outColor;
-
-uniform sampler3D uHuTex;
-uniform sampler3D uLabelTex;
-uniform vec3 uBoxSize;
-uniform vec3 uCameraLocal;
-uniform float uBoneP5, uBoneP995, uBoneTopNorm;
-uniform float uSoftP5, uSoftP95;
-uniform float uBoneOpacity, uMetalOpacity, uSoftOpacity;
-uniform float uBoneVisible, uMetalVisible, uSoftVisible;
-uniform float uClipEnabled;
-uniform vec4 uClipPlane;
-uniform vec3 uLightDir;
-uniform float uTargetStep;
-
-const vec3 METAL_COLOR = vec3(0.161, 0.545, 1.0);
-const int MAX_STEPS = 1024;
-const int MIN_STEPS = 32;
-
-// Absorption coefficients (1/mm) -- how "thick" each material needs to be
-// (at full shape=1.0) to become opaque. Bone: ~99% opaque after 1.5mm of
-// solid material. Metal: near-full opacity even in a single raymarch step,
-// so a thin plate can't under-render regardless of viewing angle. Soft
-// tissue: chosen to match the previous flat-alpha look's density, now
-// applied through the same physically-correct (step-size-invariant) form
-// so it doesn't reintroduce banding once step size varies per ray.
-const float BONE_COEFF = 3.0;
-const float METAL_COEFF = 8.0;
-const float SOFT_COEFF = 0.04;
-
-vec3 boneGradient(float hu){
-  float t = clamp((hu - uBoneP5) / max(uBoneP995 - uBoneP5, 0.0001), 0.0, 1.0);
-  vec3 c0 = vec3(0.541, 0.290, 0.118);
-  vec3 c1 = vec3(0.847, 0.647, 0.290);
-  vec3 c2 = vec3(0.941, 0.902, 0.824);
-  vec3 c3 = vec3(1.0, 1.0, 1.0);
-  if(t < 0.30) return mix(c0, c1, t / 0.30);
-  if(t < 0.65) return mix(c1, c2, (t - 0.30) / 0.35);
-  return mix(c2, c3, (t - 0.65) / 0.35);
-}
-
-vec3 skinGradient(float hu){
-  float t = clamp((hu - uSoftP5) / max(uSoftP95 - uSoftP5, 0.0001), 0.0, 1.0);
-  return mix(vec3(0.725, 0.478, 0.341), vec3(0.878, 0.675, 0.522), t);
-}
-
-vec3 localToUvw(vec3 p){
-  return vec3(
-    0.5 - p.x / uBoxSize.x,
-    0.5 - p.z / uBoxSize.z,
-    0.5 + p.y / uBoxSize.y
-  );
-}
-
-vec2 hitBox(vec3 orig, vec3 dir){
-  vec3 boxMin = -uBoxSize * 0.5;
-  vec3 boxMax = uBoxSize * 0.5;
-  vec3 invDir = 1.0 / dir;
-  vec3 t1 = (boxMin - orig) * invDir;
-  vec3 t2 = (boxMax - orig) * invDir;
-  vec3 tMin = min(t1, t2);
-  vec3 tMax = max(t1, t2);
-  return vec2(max(max(tMin.x, tMin.y), tMin.z), min(min(tMax.x, tMax.y), tMax.z));
-}
-
-// Interleaved Gradient Noise (Jimenez 2014) -- a per-pixel-stable dither
-// on the ray start position, to break up residual step-aliasing layering
-// into much-less-visible noise. Deliberately NOT re-randomized per frame:
-// there's no temporal accumulation/TAA here, so a time-varying jitter
-// would shimmer during rotation instead of just fixing banding.
-float jitterHash(vec2 co){
-  return fract(52.9829189 * fract(dot(co, vec2(0.06711056, 0.00583715))));
-}
-
-void main(){
-  vec3 rayDir = normalize(vLocalPos - uCameraLocal);
-  vec2 hit = hitBox(uCameraLocal, rayDir);
-  float tNear = max(hit.x, 0.0);
-  float tFar = hit.y;
-  if(tFar <= tNear) discard;
-
-  float rayLength = tFar - tNear;
-  int numSteps = clamp(int(rayLength / uTargetStep), MIN_STEPS, MAX_STEPS);
-  float stepSize = rayLength / float(numSteps);
-  vec3 stepVec = rayDir * stepSize;
-
-  float jitter = jitterHash(gl_FragCoord.xy);
-  vec3 samplePos = uCameraLocal + rayDir * (tNear + jitter * stepSize);
-  vec3 gradStep = vec3(0.66);
-
-  vec3 accumColor = vec3(0.0);
-  float accumAlpha = 0.0;
-
-  for(int i = 0; i < MAX_STEPS; i++){
-    if(i >= numSteps) break;
-    if(accumAlpha > 0.98) break;
-
-    bool skip = false;
-    if(uClipEnabled > 0.5 && dot(samplePos, uClipPlane.xyz) + uClipPlane.w < 0.0) skip = true;
-
-    vec3 uvw = localToUvw(samplePos);
-    if(uvw.x < 0.0 || uvw.x > 1.0 || uvw.y < 0.0 || uvw.y > 1.0 || uvw.z < 0.0 || uvw.z > 1.0) skip = true;
-
-    if(!skip){
-      float huNorm = texture(uHuTex, uvw).r;
-      int labelId = int(texture(uLabelTex, uvw).r * 255.0 + 0.5);
-
-      // Strict priority chain, not independent per-material branches --
-      // a single sample contributes exactly one material's absorption,
-      // never a double-composite of e.g. bone-density-positive AND
-      // soft-tissue-labeled at the same partial-volume boundary voxel.
-      float coeff = 0.0;
-      float shape = 0.0;
-      vec3 color = vec3(0.0);
-      if(labelId == 5){
-        shape = 1.0;
-        color = METAL_COLOR;
-        coeff = METAL_COEFF * uMetalOpacity * uMetalVisible;
-      } else {
-        float boneShape = smoothstep(uBoneP5, uBoneTopNorm, huNorm);
-        if(boneShape > 0.0){
-          shape = boneShape;
-          color = boneGradient(huNorm);
-          coeff = BONE_COEFF * uBoneOpacity * uBoneVisible;
-        } else if(labelId == 2){
-          shape = 1.0;
-          color = skinGradient(huNorm);
-          coeff = SOFT_COEFF * uSoftOpacity * uSoftVisible;
-        }
-      }
-
-      float totalCoeff = coeff * shape;
-      if(totalCoeff > 0.0001){
-        float hx1 = texture(uHuTex, localToUvw(samplePos + vec3(gradStep.x, 0.0, 0.0))).r;
-        float hx2 = texture(uHuTex, localToUvw(samplePos - vec3(gradStep.x, 0.0, 0.0))).r;
-        float hy1 = texture(uHuTex, localToUvw(samplePos + vec3(0.0, gradStep.y, 0.0))).r;
-        float hy2 = texture(uHuTex, localToUvw(samplePos - vec3(0.0, gradStep.y, 0.0))).r;
-        float hz1 = texture(uHuTex, localToUvw(samplePos + vec3(0.0, 0.0, gradStep.z))).r;
-        float hz2 = texture(uHuTex, localToUvw(samplePos - vec3(0.0, 0.0, gradStep.z))).r;
-        vec3 grad = vec3(hx1 - hx2, hy1 - hy2, hz1 - hz2);
-        float gradLen = length(grad);
-        vec3 normal = gradLen > 0.0001 ? -grad / gradLen : vec3(0.0, 1.0, 0.0);
-        float diffuse = max(dot(normal, uLightDir), 0.0);
-        color *= (0.55 + 0.55 * diffuse);
-
-        // Beer-Lambert: physically correct and step-size-invariant --
-        // opacity/visibility multipliers are folded into totalCoeff
-        // *before* this exponential (not multiplied onto stepAlpha
-        // afterward), which matters: doing it after breaks true
-        // invariance and stops the opacity slider from actually capping
-        // a thick structure's max opacity, since repeated compositing
-        // still saturates accumAlpha to 1 regardless of a post-hoc
-        // multiplier.
-        float stepAlpha = 1.0 - exp(-totalCoeff * stepSize);
-        accumColor += (1.0 - accumAlpha) * stepAlpha * color;
-        accumAlpha += (1.0 - accumAlpha) * stepAlpha;
-      }
-    }
-
-    samplePos += stepVec;
-  }
-
-  if(accumAlpha < 0.01) discard;
-  outColor = vec4(accumColor, accumAlpha);
-}
-`;
-
-const material = new THREE.RawShaderMaterial({
-  glslVersion: THREE.GLSL3,
-  uniforms,
-  vertexShader,
-  fragmentShader,
-  transparent: true,
-  premultipliedAlpha: true,
-  side: THREE.BackSide,
-  depthWrite: false,
-});
-
-const boxGeo = new THREE.BoxGeometry(sizeX, sizeY, sizeZ);
-const volumeMesh = new THREE.Mesh(boxGeo, material);
-scene.add(volumeMesh);
 
 document.getElementById('loading').style.display = 'none';
 
-// Interaction LOD: sampling finely (uTargetStep=0.35mm) is the whole
-// point while the view is still, but not worth paying for every frame
-// while the camera is actively moving, when full resolution is least
-// perceptible anyway. Raise the target step (coarser, faster) for the
-// duration of an OrbitControls drag, restore it on release.
-controls.addEventListener('start', () => { uniforms.uTargetStep.value = 1.0; });
-controls.addEventListener('end', () => { uniforms.uTargetStep.value = 0.35; });
-
-// ---------------------------------------------------------------------
-// Per-structure toggle + opacity controls -- drive shader uniforms
-// directly instead of per-object material/visibility state.
-// ---------------------------------------------------------------------
-const STRUCTURES = ['bone', 'metal', 'soft_tissue'];
-const UNIFORM_KEY = { bone:'Bone', metal:'Metal', soft_tissue:'Soft' };
-const visibleState = { bone:false, metal:true, soft_tissue:false };
-
-STRUCTURES.forEach(name => {
-  const toggle = document.getElementById('toggle-' + name);
-  const slider = document.getElementById('opacity-' + name);
-  const valEl = document.getElementById('opacityVal-' + name);
-  const key = UNIFORM_KEY[name];
-  if(!toggle || !slider) return;
-
-  toggle.onclick = () => {
-    const on = !visibleState[name];
-    visibleState[name] = on;
-    toggle.classList.toggle('on', on);
-    uniforms['u' + key + 'Visible'].value = on ? 1.0 : 0.0;
-  };
-
-  slider.addEventListener('input', () => {
-    uniforms['u' + key + 'Opacity'].value = slider.value / 100;
-    valEl.textContent = slider.value + '%';
-  });
-});
-
-// ---------------------------------------------------------------------
-// Segmented-part mesh layer (optional, additive) -- decimated GLB meshes
-// derived from the user's own Slicer DentalSegmentator run, prepared by
-// tools/prepare_dental_meshes.py. That script bakes the coordinate
-// transform in at export time (verified against this volume's own HU
-// data before shipping -- see its docstring), so these load directly
-// into the same display-space coordinates as the volume box below, no
-// further transform needed here. Loaded independently of the volume
-// data above: a failure here must never block the core density-rendered
-// viewer, so each fetch gets its own try/catch and a missing/broken file
-// just logs and leaves that toggle inert rather than showing an error.
-// ---------------------------------------------------------------------
-const MESH_STRUCTURES = [
-  { key:'maxilla_upper_skull', color:0xd8c090 },
-  { key:'mandible',            color:0xc8a068 },
-  { key:'upper_teeth',         color:0xf2ecd8 },
-  { key:'lower_teeth',         color:0xe0d4b0 },
-  { key:'mandibular_canal',    color:0xff5a5a },
-];
-const gltfLoader = new GLTFLoader();
+loadedParts.forEach(({ struct, mesh }) => wireMeshControls(struct.key, mesh));
 
 function wireMeshControls(structKey, mesh){
   const toggle = document.getElementById('toggle-mesh-' + structKey);
@@ -858,104 +472,14 @@ function wireMeshControls(structKey, mesh){
   });
 }
 
-async function loadSegmentedMesh(struct){
-  try {
-    const buf = await fetchGzip(`dental_meshes/${struct.key}.glb.gz`);
-    const gltf = await new Promise((resolve, reject) => gltfLoader.parse(buf, '', resolve, reject));
-    const mesh = gltf.scene;
-    mesh.traverse(obj => {
-      if(obj.isMesh){
-        obj.material = new THREE.MeshStandardMaterial({
-          color: struct.color, transparent:true, opacity:0.9, roughness:0.75, metalness:0.0,
-        });
-      }
-    });
-    mesh.visible = true;
-    scene.add(mesh);
-    wireMeshControls(struct.key, mesh);
-  } catch(e) {
-    console.error(`segmented mesh "${struct.key}" failed to load:`, e);
-  }
-}
-MESH_STRUCTURES.forEach(loadSegmentedMesh);
-
 // ---------------------------------------------------------------------
-// Click-to-identify + point-to-point / angle measurement.
-//
-// There's no explicit surface to raycast against (that's the whole point
-// of volume rendering), so this walks the HU and label arrays directly in
-// JS -- the same data driving the shader, just read from the CPU side --
-// stepping along the click ray until it finds the first voxel belonging
-// to a currently-visible structure. pickAtLocal() below mirrors the
-// shader's exact priority chain (metal label -> bone density threshold ->
-// soft-tissue label) so a click always agrees with what's actually
-// rendered on screen -- bone is no longer a label lookup, so picking it
-// by exact label match would silently disagree with the shader the
-// moment a dense-but-unlabeled voxel renders as bone but isn't picked as
-// one. Segmentation only produces class-level labels, so identify reports
-// the real classified structure, not a guessed anatomical name like
-// "maxilla".
+// Click-to-identify + point-to-point / angle measurement -- real
+// THREE.Raycaster intersection against the loaded mesh geometry (there's
+// an actual surface to hit now, unlike the old volume-raymarch approach
+// that had to walk the density field manually). Raycasting naturally
+// respects each part's current visibility, so a hidden structure is
+// simply unclickable, no extra bookkeeping needed.
 // ---------------------------------------------------------------------
-const STRUCTURE_LABEL = { bone:'Bone', metal:'Metal hardware', soft_tissue:'Soft tissue' };
-const LABEL_ID = { metal:5, soft_tissue:2 };
-
-function labelAtLocal(p){
-  const u = 0.5 - p.x / sizeX;
-  const v = 0.5 - p.z / sizeZ;
-  const w = 0.5 + p.y / sizeY;
-  if(u < 0 || u > 1 || v < 0 || v > 1 || w < 0 || w > 1) return -1;
-  const col = Math.min(ncols - 1, Math.floor(u * ncols));
-  const row = Math.min(nrows - 1, Math.floor(v * nrows));
-  const slice = Math.min(nslices - 1, Math.floor(w * nslices));
-  return labelData[slice * nrows * ncols + row * ncols + col];
-}
-
-function huAtLocal(p){
-  const u = 0.5 - p.x / sizeX;
-  const v = 0.5 - p.z / sizeZ;
-  const w = 0.5 + p.y / sizeY;
-  if(u < 0 || u > 1 || v < 0 || v > 1 || w < 0 || w > 1) return null;
-  const col = Math.min(ncols - 1, Math.floor(u * ncols));
-  const row = Math.min(nrows - 1, Math.floor(v * nrows));
-  const slice = Math.min(nslices - 1, Math.floor(w * nslices));
-  const raw = huData[slice * nrows * ncols + row * ncols + col];
-  return meta.windowMinHu + (raw / 255) * (meta.windowMaxHu - meta.windowMinHu);
-}
-
-function pickAtLocal(p){
-  const lab = labelAtLocal(p);
-  if(lab < 0) return null;
-  if(lab === LABEL_ID.metal) return visibleState.metal ? 'metal' : null;
-  const hu = huAtLocal(p);
-  if(hu !== null && hu >= boneFloorHU) return visibleState.bone ? 'bone' : null;
-  if(lab === LABEL_ID.soft_tissue) return visibleState.soft_tissue ? 'soft_tissue' : null;
-  return null;
-}
-
-function raycastVolume(origin, dir){
-  const boxMin = new THREE.Vector3(-sizeX/2, -sizeY/2, -sizeZ/2);
-  const boxMax = new THREE.Vector3(sizeX/2, sizeY/2, sizeZ/2);
-  const invDir = new THREE.Vector3(1/dir.x, 1/dir.y, 1/dir.z);
-  const t1 = boxMin.clone().sub(origin).multiply(invDir);
-  const t2 = boxMax.clone().sub(origin).multiply(invDir);
-  const tMin = new THREE.Vector3(Math.min(t1.x,t2.x), Math.min(t1.y,t2.y), Math.min(t1.z,t2.z));
-  const tMax = new THREE.Vector3(Math.max(t1.x,t2.x), Math.max(t1.y,t2.y), Math.max(t1.z,t2.z));
-  const tNear = Math.max(0, Math.max(tMin.x, Math.max(tMin.y, tMin.z)));
-  const tFar = Math.min(tMax.x, Math.min(tMax.y, tMax.z));
-  if(tFar <= tNear) return null;
-
-  const steps = 500;
-  const stepSize = (tFar - tNear) / steps;
-  const pos = origin.clone().addScaledVector(dir, tNear);
-  const stepVec = dir.clone().multiplyScalar(stepSize);
-  for(let i = 0; i < steps; i++){
-    const structure = pickAtLocal(pos);
-    if(structure) return { point: pos.clone(), structure };
-    pos.add(stepVec);
-  }
-  return null;
-}
-
 let toolMode = 'rotate'; // 'rotate' | 'identify' | 'distance' | 'angle'
 const modeButtons = {
   rotate: document.getElementById('mode-rotate'),
@@ -1027,22 +551,23 @@ function handleToolClick(clientX, clientY){
   pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNDC, camera);
-  const hit = raycastVolume(raycaster.ray.origin, raycaster.ray.direction);
-  if(!hit) return;
+  const intersects = raycaster.intersectObjects(loadedMeshRoots, true);
+  if(!intersects.length) return;
+  const hitPoint = intersects[0].point;
+  const structureLabel = intersects[0].object.userData.structureLabel || 'Unknown structure';
 
   if(toolMode === 'identify'){
     clearMarkers();
-    addMarkerSphere(hit.point);
-    const p = hit.point;
-    toolResult.innerHTML = `<b style="color:var(--amber)">${STRUCTURE_LABEL[hit.structure]}</b><br>`
-      + `position (mm from volume center): ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`;
+    addMarkerSphere(hitPoint);
+    toolResult.innerHTML = `<b style="color:var(--amber)">${structureLabel}</b><br>`
+      + `position (mm): ${hitPoint.x.toFixed(1)}, ${hitPoint.y.toFixed(1)}, ${hitPoint.z.toFixed(1)}`;
     return;
   }
 
   if(toolMode === 'distance'){
     if(measurePoints.length >= 2) clearMarkers();
-    measurePoints.push(hit.point.clone());
-    addMarkerSphere(hit.point);
+    measurePoints.push(hitPoint.clone());
+    addMarkerSphere(hitPoint);
     if(measurePoints.length === 2){
       addMarkerLine(measurePoints[0], measurePoints[1]);
       const d = measurePoints[0].distanceTo(measurePoints[1]);
@@ -1055,8 +580,8 @@ function handleToolClick(clientX, clientY){
 
   if(toolMode === 'angle'){
     if(measurePoints.length >= 3) clearMarkers();
-    measurePoints.push(hit.point.clone());
-    addMarkerSphere(hit.point);
+    measurePoints.push(hitPoint.clone());
+    addMarkerSphere(hitPoint);
     if(measurePoints.length >= 2){
       addMarkerLine(measurePoints[measurePoints.length - 2], measurePoints[measurePoints.length - 1]);
     }
@@ -1081,9 +606,12 @@ renderer.domElement.addEventListener('pointerup', e => {
 });
 
 // ---------------------------------------------------------------------
-// Clipping plane -- a shader uniform now instead of per-material
-// THREE.Plane objects; the raymarch loop skips samples on the clipped
-// side. Same axis convention as the rest of this project.
+// Clipping plane -- THREE's native renderer-level clipping (applies to
+// every mesh uniformly), replacing the old raymarch shader's manual
+// per-sample skip test. Same axis convention as the rest of this
+// project; plane position/orientation expressed relative to the loaded
+// model's own bounding-box center, since there's no volume-center origin
+// to reference anymore.
 // ---------------------------------------------------------------------
 let clipEnabled = false;
 let clipAxis = 'axial';
@@ -1093,18 +621,20 @@ const CLIP_AXIS_NORMAL = {
   coronal:  new THREE.Vector3(0, 0, 1),
   sagittal: new THREE.Vector3(1, 0, 0),
 };
+const clipPlane = new THREE.Plane();
 
 function updateClipPlane(){
   const normal = CLIP_AXIS_NORMAL[clipAxis].clone();
   if(clipFlipped) normal.negate();
   const posFrac = document.getElementById('clipSlider').value / 100;
-  const constant = -posFrac * (sceneScale * 0.6);
-  uniforms.uClipPlane.value.set(normal.x, normal.y, normal.z, constant);
+  const planePoint = boxCenter.clone().addScaledVector(normal, posFrac * sceneScale * 0.6);
+  clipPlane.setFromNormalAndCoplanarPoint(normal, planePoint);
+  renderer.clippingPlanes = clipEnabled ? [clipPlane] : [];
 }
 document.getElementById('clipToggle').onclick = function(){
   clipEnabled = !clipEnabled;
   this.classList.toggle('on', clipEnabled);
-  uniforms.uClipEnabled.value = clipEnabled ? 1.0 : 0.0;
+  updateClipPlane();
 };
 document.getElementById('clipFlip').onclick = function(){
   clipFlipped = !clipFlipped;
@@ -1155,21 +685,13 @@ invertSwitch.onclick = ()=>{
   applyImageFilter();
 };
 
-const _tmpTarget = new THREE.Vector3();
 function animate(){
   requestAnimationFrame(animate);
   controls.update();
-  uniforms.uCameraLocal.value.copy(camera.position);
-  // Headlamp-style light direction: approximated as a fixed direction
-  // (camera -> target) rather than recomputed per-sample, which is a
-  // reasonable approximation given the volume is much smaller than the
-  // camera distance from it.
-  _tmpTarget.subVectors(camera.position, controls.target).normalize();
-  uniforms.uLightDir.value.copy(_tmpTarget);
-  // Same headlamp concept for the segmented-part meshes' real light.
-  meshKeyLight.position.copy(camera.position);
-  meshKeyLight.target.position.copy(controls.target);
-  meshKeyLight.target.updateMatrixWorld();
+  // Headlamp-style light: follows the camera, aimed at the model center.
+  keyLight.position.copy(camera.position);
+  keyLight.target.position.copy(controls.target);
+  keyLight.target.updateMatrixWorld();
   renderer.render(scene, camera);
 }
 animate();
