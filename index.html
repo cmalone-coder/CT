@@ -187,7 +187,7 @@
   </div>
   <!-- Bump this on every push that changes what's visible on the page --
        lets the user tell a real update from a stale cache at a glance. -->
-  <div class="disclaimer">v3</div>
+  <div class="disclaimer">v4</div>
 </header>
 
 <div class="nav-backdrop" id="navBackdrop"></div>
@@ -348,6 +348,14 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(wrap.clientWidth, wrap.clientHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.localClippingEnabled = true;
+// Real cast shadows -- this is the actual difference between this and a
+// renderer like 3D Slicer's: without this, concave anatomy (eye sockets,
+// nasal cavity, the space between teeth) only reads from each surface's
+// own angle to the light, never from one part of the model occluding
+// another. That self-shadowing is most of what makes shape/curvature
+// legible at a glance.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 wrap.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -366,13 +374,21 @@ function showError(msg){
 // light positioned at the camera, aimed at the model's center (set once
 // the model's bounding box is known, below), updated every frame in
 // animate() so it always lights whatever's currently facing the viewer.
-const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.6);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(2048, 2048);
+keyLight.shadow.bias = -0.0005;
 scene.add(keyLight);
 scene.add(keyLight.target);
-const ambLight = new THREE.AmbientLight(0xffffff, 0.9);
+// Ambient/hemisphere fill kept deliberately lower than before -- too much
+// flat, non-directional light is what was washing out shadow contrast
+// and making the surface look flat despite the real curvature being
+// there. Brightness now comes mostly from the shadow-casting key light
+// instead of an even flood over everything.
+const ambLight = new THREE.AmbientLight(0xffffff, 0.5);
 scene.add(ambLight);
 // Soft sky/ground fill so the side away from the headlamp isn't flat black.
-const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.35);
 scene.add(hemiLight);
 
 async function fetchGzip(url){
@@ -422,11 +438,17 @@ async function loadSegmentedMesh(struct){
         color: struct.color,
         transparent: true,
         opacity: struct.opacity ?? 0.9,
-        roughness: struct.roughness ?? 0.75,
+        // Slightly glossier default than before (0.75 -> 0.55) -- some
+        // specular response is part of what makes curvature read at a
+        // glance (a pure matte/Lambertian surface flattens it out),
+        // without going so low it looks like polished plastic.
+        roughness: struct.roughness ?? 0.55,
         metalness: struct.metalness ?? 0.0,
         side: THREE.DoubleSide,
       });
       obj.userData.structureLabel = struct.label;
+      obj.castShadow = true;
+      obj.receiveShadow = true;
     }
   });
   mesh.visible = true;
@@ -456,6 +478,19 @@ camera.position.set(boxCenter.x, boxCenter.y, boxCenter.z + sceneScale * 1.6);
 camera.near = sceneScale / 100;
 camera.far = sceneScale * 10;
 camera.updateProjectionMatrix();
+
+// Shadow camera is an orthographic frustum sized to the actual model --
+// too tight and parts clip out of the shadow map, too loose and shadow
+// resolution gets wasted on empty space. sceneScale/1.6 gives some
+// margin beyond the model's own bounding radius.
+const shadowExtent = sceneScale * 0.8;
+keyLight.shadow.camera.left = -shadowExtent;
+keyLight.shadow.camera.right = shadowExtent;
+keyLight.shadow.camera.top = shadowExtent;
+keyLight.shadow.camera.bottom = -shadowExtent;
+keyLight.shadow.camera.near = sceneScale * 0.1;
+keyLight.shadow.camera.far = sceneScale * 4;
+keyLight.shadow.camera.updateProjectionMatrix();
 controls.target.copy(boxCenter);
 controls.minDistance = sceneScale * 0.05;
 controls.maxDistance = sceneScale * 6;
