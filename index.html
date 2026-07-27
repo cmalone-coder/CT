@@ -187,7 +187,7 @@
   </div>
   <!-- Bump this on every push that changes what's visible on the page --
        lets the user tell a real update from a stale cache at a glance. -->
-  <div class="disclaimer">v1</div>
+  <div class="disclaimer">v2</div>
 </header>
 
 <div class="nav-backdrop" id="navBackdrop"></div>
@@ -240,9 +240,18 @@
           <input type="range" id="opacity-mesh-mandibular_canal" min="5" max="100" value="90">
           <span class="val" id="opacityVal-mesh-mandibular_canal">90%</span>
         </div>
+
+        <div class="toggle-row" style="margin-top:12px;">
+          <span class="toggle-label"><span class="swatch" style="background:#298bff"></span>Metal hardware</span>
+          <div class="switch on" id="toggle-mesh-metal_hardware"><div class="knob"></div></div>
+        </div>
+        <div class="slider-row" style="margin-top:4px;">
+          <input type="range" id="opacity-mesh-metal_hardware" min="5" max="100" value="100">
+          <span class="val" id="opacityVal-mesh-metal_hardware">100%</span>
+        </div>
       </div>
       <div class="legend-note">
-        Independently segmented by the DentalSegmentator deep-learning model, run directly in 3D Slicer — not this project's own density-threshold pipeline. Full resolution, no decimation.
+        Bone/teeth/canal independently segmented by the DentalSegmentator deep-learning model, run directly in 3D Slicer. Metal hardware manually segmented separately (Segment_2) — verified against this project's own density-based metal classification (100% overlap). Full resolution, no decimation.
       </div>
     </div>
 
@@ -390,6 +399,7 @@ const MESH_STRUCTURES = [
   { key:'upper_teeth',         color:0xf2ecd8, label:'Upper teeth' },
   { key:'lower_teeth',         color:0xe0d4b0, label:'Lower teeth' },
   { key:'mandibular_canal',    color:0xff5a5a, label:'Mandibular canal' },
+  { key:'metal_hardware',      color:0x298bff, label:'Metal hardware', roughness:0.3, metalness:0.9, opacity:1.0 },
 ];
 const gltfLoader = new GLTFLoader();
 const loadedMeshRoots = [];
@@ -401,7 +411,11 @@ async function loadSegmentedMesh(struct){
   mesh.traverse(obj => {
     if(obj.isMesh){
       obj.material = new THREE.MeshStandardMaterial({
-        color: struct.color, transparent:true, opacity:0.9, roughness:0.75, metalness:0.0,
+        color: struct.color,
+        transparent: true,
+        opacity: struct.opacity ?? 0.9,
+        roughness: struct.roughness ?? 0.75,
+        metalness: struct.metalness ?? 0.0,
         side: THREE.DoubleSide,
       });
       obj.userData.structureLabel = struct.label;
@@ -442,6 +456,40 @@ controls.update();
 document.getElementById('loading').style.display = 'none';
 
 loadedParts.forEach(({ struct, mesh }) => wireMeshControls(struct.key, mesh));
+
+// ---------------------------------------------------------------------
+// R/L side labels -- world-space sprites (billboard, always face the
+// camera, but their *position* is fixed in the scene like everything
+// else) so they stay anchored to the model's actual anatomical sides as
+// you rotate around it, rather than being fixed to the screen edges.
+// Positive X in this viewer's display-space convention is the patient's
+// right (verified repeatedly this session against known right-sided
+// findings), so R goes on +X, L on -X.
+// ---------------------------------------------------------------------
+function makeSideLabel(text){
+  const canvas = document.createElement('canvas');
+  canvas.width = 128; canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.font = 'bold 96px sans-serif';
+  ctx.fillStyle = '#ffb454';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 64, 68);
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map:texture, depthTest:false, transparent:true });
+  const sprite = new THREE.Sprite(material);
+  const size = sceneScale * 0.09;
+  sprite.scale.set(size, size, 1);
+  sprite.renderOrder = 997;
+  return sprite;
+}
+const labelMargin = sceneScale * 0.08;
+const rLabel = makeSideLabel('R');
+rLabel.position.set(boxCenter.x + boxSize.x/2 + labelMargin, boxCenter.y, boxCenter.z);
+scene.add(rLabel);
+const lLabel = makeSideLabel('L');
+lLabel.position.set(boxCenter.x - boxSize.x/2 - labelMargin, boxCenter.y, boxCenter.z);
+scene.add(lLabel);
 
 function wireMeshControls(structKey, mesh){
   const toggle = document.getElementById('toggle-mesh-' + structKey);

@@ -48,12 +48,22 @@ import trimesh
 # hard per-file limit (and avoids Git LFS, which doesn't reliably serve
 # real content through GitHub Pages -- it tends to serve the LFS pointer
 # text file instead of the binary unless extra proxying is set up).
+STL_PREFIX = "3 ORBIT-FACE 1.00_Segmentation_"
+
+# (source filename, output basename, target face count after decimation --
+# None means keep full resolution). Filenames are given in full rather
+# than assembled from a shared prefix, since not everything here follows
+# the DentalSegmentator STL naming convention -- Segment_2.obj is a
+# separately, manually-segmented plate+screws mesh (SPACE=LPS per its own
+# header, same coordinate convention already verified for the STLs), not
+# an automatic export.
 STRUCTURES = [
-    ("Maxilla & Upper Skull", "maxilla_upper_skull", None),
-    ("Mandible", "mandible", None),
-    ("Lower Teeth", "lower_teeth", None),
-    ("Upper Teeth", "upper_teeth", None),
-    ("Mandibular canal", "mandibular_canal", None),
+    (f"{STL_PREFIX}Maxilla & Upper Skull.stl", "maxilla_upper_skull", None),
+    (f"{STL_PREFIX}Mandible.stl", "mandible", None),
+    (f"{STL_PREFIX}Lower Teeth.stl", "lower_teeth", None),
+    (f"{STL_PREFIX}Upper Teeth.stl", "upper_teeth", None),
+    (f"{STL_PREFIX}Mandibular canal.stl", "mandibular_canal", None),
+    ("Segment_2.obj", "metal_hardware", None),
 ]
 
 
@@ -80,9 +90,7 @@ def build_transform(meta):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src-dir", required=True, help="directory containing the source STLs")
-    ap.add_argument("--stl-prefix", default="3 ORBIT-FACE 1.00_Segmentation_",
-                     help="filename prefix before the structure name, e.g. 'Mandible.stl'")
+    ap.add_argument("--src-dir", required=True, help="directory containing the source meshes")
     ap.add_argument("--volume-meta", default="volume/volume_meta.json")
     ap.add_argument("--out-dir", default="dental_meshes")
     args = ap.parse_args()
@@ -95,11 +103,11 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
 
-    for stl_name, out_name, target_faces in STRUCTURES:
-        stl_path = os.path.join(args.src_dir, f"{args.stl_prefix}{stl_name}.stl")
-        print(f"\n{stl_name}:")
-        print(f"  loading {stl_path} ...")
-        mesh = trimesh.load(stl_path)
+    for src_name, out_name, target_faces in STRUCTURES:
+        src_path = os.path.join(args.src_dir, src_name)
+        print(f"\n{src_name}:")
+        print(f"  loading {src_path} ...")
+        mesh = trimesh.load(src_path, force="mesh")
         print(f"  raw: {len(mesh.vertices)} verts, {len(mesh.faces)} faces")
 
         if target_faces is not None and len(mesh.faces) > target_faces:
@@ -109,7 +117,7 @@ def main():
             print(f"  keeping full resolution (no decimation)")
 
         if len(mesh.faces) == 0:
-            raise RuntimeError(f"{stl_name}: decimation produced an empty mesh -- target_faces too low?")
+            raise RuntimeError(f"{src_name}: decimation produced an empty mesh -- target_faces too low?")
 
         mesh.apply_transform(M)
         mesh.fix_normals()
