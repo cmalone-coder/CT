@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ct-viewer-local",
+      "runtimeExecutable": "C:\\Users\\Rolf\\Desktop\\CT Scan\\project\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "http.server", "8743"],
+      "port": 8743
+    }
+  ]
+}

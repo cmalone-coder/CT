@@ -197,7 +197,7 @@
     <a href="gallery.html" class="nav-link">View original slices →</a>
   </div>
   <div class="disclaimer">
-    Direct volume rendering (GPU raymarching) of the raw CT density field — no surface mesh is extracted, so there's no decimation, no marching-cubes faceting, and no mesh debris to introduce artifacts. Bone (including teeth, rendered as one continuous dense structure) comes from density alone; metal hardware is highlighted using the validated segmentation label.<br>
+    Direct volume rendering (GPU raymarching) of the raw CT density field for bone/metal/soft tissue — no surface mesh is extracted for that layer, so there's no decimation, no marching-cubes faceting, and no mesh debris to introduce artifacts. Bone (including teeth, rendered as one continuous dense structure) comes from density alone; metal hardware is highlighted using the validated segmentation label. An optional "Segmented parts" layer adds decimated meshes from an independent deep-learning segmentation (DentalSegmentator, run separately in 3D Slicer) for individually selectable maxilla/mandible/teeth/nerve-canal.<br>
     For informational discussion only — not a diagnostic tool.
   </div>
 </header>
@@ -239,6 +239,59 @@
         <span class="val-label">Soft tissue</span>
         <input type="range" id="opacity-soft_tissue" min="5" max="100" value="65">
         <span class="val" id="opacityVal-soft_tissue">65%</span>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label>Segmented parts (DentalSegmentator)</label>
+      <div class="layer-btns">
+        <div class="toggle-row">
+          <span class="toggle-label"><span class="swatch" style="background:#d8c090"></span>Maxilla &amp; upper skull</span>
+          <div class="switch" id="toggle-mesh-maxilla_upper_skull"><div class="knob"></div></div>
+        </div>
+        <div class="slider-row" style="margin-top:4px;">
+          <input type="range" id="opacity-mesh-maxilla_upper_skull" min="5" max="100" value="90">
+          <span class="val" id="opacityVal-mesh-maxilla_upper_skull">90%</span>
+        </div>
+
+        <div class="toggle-row" style="margin-top:12px;">
+          <span class="toggle-label"><span class="swatch" style="background:#c8a068"></span>Mandible</span>
+          <div class="switch" id="toggle-mesh-mandible"><div class="knob"></div></div>
+        </div>
+        <div class="slider-row" style="margin-top:4px;">
+          <input type="range" id="opacity-mesh-mandible" min="5" max="100" value="90">
+          <span class="val" id="opacityVal-mesh-mandible">90%</span>
+        </div>
+
+        <div class="toggle-row" style="margin-top:12px;">
+          <span class="toggle-label"><span class="swatch" style="background:#f2ecd8"></span>Upper teeth</span>
+          <div class="switch" id="toggle-mesh-upper_teeth"><div class="knob"></div></div>
+        </div>
+        <div class="slider-row" style="margin-top:4px;">
+          <input type="range" id="opacity-mesh-upper_teeth" min="5" max="100" value="90">
+          <span class="val" id="opacityVal-mesh-upper_teeth">90%</span>
+        </div>
+
+        <div class="toggle-row" style="margin-top:12px;">
+          <span class="toggle-label"><span class="swatch" style="background:#e0d4b0"></span>Lower teeth</span>
+          <div class="switch" id="toggle-mesh-lower_teeth"><div class="knob"></div></div>
+        </div>
+        <div class="slider-row" style="margin-top:4px;">
+          <input type="range" id="opacity-mesh-lower_teeth" min="5" max="100" value="90">
+          <span class="val" id="opacityVal-mesh-lower_teeth">90%</span>
+        </div>
+
+        <div class="toggle-row" style="margin-top:12px;">
+          <span class="toggle-label"><span class="swatch" style="background:#ff5a5a"></span>Mandibular canal</span>
+          <div class="switch" id="toggle-mesh-mandibular_canal"><div class="knob"></div></div>
+        </div>
+        <div class="slider-row" style="margin-top:4px;">
+          <input type="range" id="opacity-mesh-mandibular_canal" min="5" max="100" value="90">
+          <span class="val" id="opacityVal-mesh-mandibular_canal">90%</span>
+        </div>
+      </div>
+      <div class="legend-note" style="margin-top:10px;">
+        Independently segmented by the DentalSegmentator deep-learning model (run directly in 3D Slicer, not this project's own density-threshold pipeline) — a separate, explicitly-labeled mesh layer, decimated for web delivery. Occupies the same physical space as the density-rendered Bone layer above; turn Bone off to avoid seeing both at once.
       </div>
     </div>
 
@@ -347,8 +400,9 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-async function boot(THREE, OrbitControls){
+async function boot(THREE, OrbitControls, GLTFLoader){
 
 const wrap = document.getElementById('canvas-wrap');
 const scene = new THREE.Scene();
@@ -368,6 +422,19 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.minDistance = 20;
 controls.maxDistance = 1200;
+
+// The raymarch shader below does all its lighting per-sample inside the
+// fragment shader -- there are otherwise zero real THREE.Light objects in
+// this scene. The segmented-part meshes (real THREE.Mesh geometry, added
+// further down) need actual scene lights or they render unlit/black.
+// Mirrors the shader's own camera-following "headlamp" concept: a
+// directional light positioned at the camera, aimed at the volume center
+// (the default light target), updated every frame in animate() below.
+const meshKeyLight = new THREE.DirectionalLight(0xffffff, 1.3);
+scene.add(meshKeyLight);
+scene.add(meshKeyLight.target);
+const meshAmbLight = new THREE.AmbientLight(0xffffff, 0.45);
+scene.add(meshAmbLight);
 
 function showError(msg){
   const el = document.getElementById('loading');
@@ -752,6 +819,67 @@ STRUCTURES.forEach(name => {
 });
 
 // ---------------------------------------------------------------------
+// Segmented-part mesh layer (optional, additive) -- decimated GLB meshes
+// derived from the user's own Slicer DentalSegmentator run, prepared by
+// tools/prepare_dental_meshes.py. That script bakes the coordinate
+// transform in at export time (verified against this volume's own HU
+// data before shipping -- see its docstring), so these load directly
+// into the same display-space coordinates as the volume box below, no
+// further transform needed here. Loaded independently of the volume
+// data above: a failure here must never block the core density-rendered
+// viewer, so each fetch gets its own try/catch and a missing/broken file
+// just logs and leaves that toggle inert rather than showing an error.
+// ---------------------------------------------------------------------
+const MESH_STRUCTURES = [
+  { key:'maxilla_upper_skull', color:0xd8c090 },
+  { key:'mandible',            color:0xc8a068 },
+  { key:'upper_teeth',         color:0xf2ecd8 },
+  { key:'lower_teeth',         color:0xe0d4b0 },
+  { key:'mandibular_canal',    color:0xff5a5a },
+];
+const gltfLoader = new GLTFLoader();
+
+function wireMeshControls(structKey, mesh){
+  const toggle = document.getElementById('toggle-mesh-' + structKey);
+  const slider = document.getElementById('opacity-mesh-' + structKey);
+  const valEl = document.getElementById('opacityVal-mesh-' + structKey);
+  if(!toggle || !slider) return;
+
+  toggle.onclick = () => {
+    const on = !mesh.visible;
+    mesh.visible = on;
+    toggle.classList.toggle('on', on);
+  };
+
+  slider.addEventListener('input', () => {
+    const op = slider.value / 100;
+    mesh.traverse(obj => { if(obj.isMesh) obj.material.opacity = op; });
+    valEl.textContent = slider.value + '%';
+  });
+}
+
+async function loadSegmentedMesh(struct){
+  try {
+    const buf = await fetchGzip(`dental_meshes/${struct.key}.glb.gz`);
+    const gltf = await new Promise((resolve, reject) => gltfLoader.parse(buf, '', resolve, reject));
+    const mesh = gltf.scene;
+    mesh.traverse(obj => {
+      if(obj.isMesh){
+        obj.material = new THREE.MeshStandardMaterial({
+          color: struct.color, transparent:true, opacity:0.9, roughness:0.75, metalness:0.0,
+        });
+      }
+    });
+    mesh.visible = false;
+    scene.add(mesh);
+    wireMeshControls(struct.key, mesh);
+  } catch(e) {
+    console.error(`segmented mesh "${struct.key}" failed to load:`, e);
+  }
+}
+MESH_STRUCTURES.forEach(loadSegmentedMesh);
+
+// ---------------------------------------------------------------------
 // Click-to-identify + point-to-point / angle measurement.
 //
 // There's no explicit surface to raycast against (that's the whole point
@@ -1038,13 +1166,17 @@ function animate(){
   // camera distance from it.
   _tmpTarget.subVectors(camera.position, controls.target).normalize();
   uniforms.uLightDir.value.copy(_tmpTarget);
+  // Same headlamp concept for the segmented-part meshes' real light.
+  meshKeyLight.position.copy(camera.position);
+  meshKeyLight.target.position.copy(controls.target);
+  meshKeyLight.target.updateMatrixWorld();
   renderer.render(scene, camera);
 }
 animate();
 
 } // end boot()
 
-boot(THREE, OrbitControls).catch(e => {
+boot(THREE, OrbitControls, GLTFLoader).catch(e => {
   const el = document.getElementById('loading');
   el.querySelector('.msg').textContent = 'LOAD ERROR — ' + e.message;
   el.querySelector('.spinner').style.display = 'none';
