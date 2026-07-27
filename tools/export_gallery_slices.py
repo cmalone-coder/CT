@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Export per-slice raw HU pixel data (no compression, no windowing baked in)
-for the gallery's diagnostic-grade viewer, plus a manifest with the geometry
+Export per-slice raw HU pixel data (gzipped, no windowing baked in) for
+the gallery's diagnostic-grade viewer, plus a manifest with the geometry
 and default window/level each series needs.
 
 Never commit the DICOM zip or extracted intermediates -- only this script's
 output (images_raw/ + gallery-manifest.js) is meant to land in the repo.
 """
 import argparse
+import gzip
 import io
 import json
 import zipfile
@@ -102,13 +103,16 @@ def export_series(slices, out_dir, key):
         raw = s.pixel_array.astype(np.int32)
         hu = (raw * slope + intercept).astype(np.int16)
         assert hu.shape == (rows, cols), f"{key} slice {i} shape mismatch: {hu.shape}"
-        # Plain, uncompressed -- gzip was tried (halves the per-slice size)
-        # but the user reported scrubbing felt choppier with it, not
-        # smoother, and was explicit that smoothness matters more than
-        # file size here. Reverted rather than chase a compression
-        # approach that made the actual experience worse.
-        fname = f"{i+1:04d}.raw"
-        (series_dir / fname).write_bytes(hu.tobytes())
+        # Gzipped (~2x smaller, measured across this scan). The earlier
+        # regression this caused wasn't actually about compression -- it
+        # was the wheel-handler debounce that shipped alongside it, which
+        # cancelled in-between frames during a scroll. gallery.html now
+        # preloads a whole series into memory in the background as soon
+        # as it's selected, so individual per-frame fetch latency during
+        # active scrolling doesn't matter anymore -- which is what makes
+        # compression safe to use here again.
+        fname = f"{i+1:04d}.raw.gz"
+        (series_dir / fname).write_bytes(gzip.compress(hu.tobytes(), compresslevel=6))
         # Position along THIS series' own real slice-stacking axis
         # (normal), not a raw Z-difference. Those are only the same
         # thing for an axial series (whose normal is approximately the

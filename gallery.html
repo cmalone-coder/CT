@@ -367,7 +367,7 @@
   <div class="disclaimer">
     <!-- Bump this on every push that changes what's visible on this page --
          lets the user tell a real update from a stale cache at a glance. -->
-    v2<br>
+    v3<br>
     All identifying data (name, DOB, MRN, accession #) has been stripped from every image and file.<br>
     For informational discussion only — not a diagnostic read.
   </div>
@@ -469,6 +469,19 @@
 
 <script src="gallery-manifest.js"></script>
 <script>
+// Per-slice HU data is gzipped (tools/export_gallery_slices.py) -- ~2x
+// smaller per slice. Safe to use here (an earlier attempt at this caused
+// a real regression, but the regression was the debounce that shipped
+// alongside it, not the compression itself -- see preloadSeries() below,
+// which is what actually fixes smooth scrubbing).
+async function fetchGzipRaw(url){
+  const res = await fetch(url);
+  if(!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
+  const ds = new DecompressionStream('gzip');
+  const stream = res.body.pipeThrough(ds);
+  return new Response(stream).arrayBuffer();
+}
+
 // GALLERY_MANIFEST (from gallery-manifest.js) covers the real cross-section
 // series with raw HU data. recon3d rotation renders are the scanner's own
 // pre-rendered flat-image sequences -- not real per-voxel HU data, so they
@@ -558,6 +571,7 @@ function selectSeries(key){
   updateSideLabels();
   resetView();
   loadFrame();
+  if(!current.flat) preloadSeries(key);
   if(window.innerWidth <= 820){
     document.getElementById('nav').classList.remove('open');
     document.getElementById('navBackdrop').classList.remove('open');
@@ -614,7 +628,7 @@ async function loadFrame(){
     // flashing an old frame if an earlier fetch resolves after a newer
     // one due to network timing).
     const requestedKey = current.key, requestedFrame = frame;
-    const buf = await fetch(`images_raw/${current.key}/${idx}.raw`).then(r=>r.arrayBuffer());
+    const buf = await fetchGzipRaw(`images_raw/${current.key}/${idx}.raw.gz`);
     if(current.key !== requestedKey || frame !== requestedFrame) return;
     hu = new Int16Array(buf);
     rawCache.set(cacheKey, hu);
@@ -841,22 +855,39 @@ stage.addEventListener('touchmove', e=>{
 }, {passive:true});
 stage.addEventListener('touchend', ()=>{ dragging=false; });
 
-// Load, debounced -- but only for frames that actually need a network
-// fetch. The first version of this delayed *every* frame change by
-// 40ms, including ones already sitting in rawCache that used to render
-// instantly -- that's what made scrolling feel laggy instead of
-// seamless. Now: already-cached frames render immediately, every time,
-// same as before any of this session's changes; the debounce only
-// kicks in for a frame that isn't cached yet, so a fast scrub burst
-// through *new* territory doesn't fire a fetch per tick.
-let loadFrameTimer = null;
-function scheduleLoadFrame(delay=40){
-  if(loadFrameTimer){ clearTimeout(loadFrameTimer); loadFrameTimer = null; }
-  if(rawCache.has(current.key + '/' + frame)){
-    loadFrame();
-    return;
+// Preload a whole series into rawCache in the background, as soon as
+// it's selected -- this, not debouncing, is the actual fix for smooth
+// scrubbing. A debounce that skips/cancels in-between frames during a
+// scroll (tried, then reverted) trades away exactly the thing the user
+// wants: every frame you scroll past should actually show, not just the
+// one you land on. Preloading sidesteps the tradeoff entirely: fetch
+// everything ahead of time, in the background, with limited concurrency
+// so it doesn't compete with whatever frame is being actively viewed,
+// so that by the time the user actually scrolls to a given slice it's
+// already sitting in memory and renders with no network wait at all.
+let preloadGeneration = 0;
+async function preloadSeries(key){
+  const s = rawByKey[key];
+  if(!s) return;
+  const myGen = ++preloadGeneration;
+  const concurrency = 4;
+  let nextIdx = 1;
+  async function worker(){
+    while(nextIdx <= s.count){
+      if(myGen !== preloadGeneration) return; // a different series was selected since -- abandon
+      const idx = nextIdx++;
+      const cacheKey = key + '/' + idx;
+      if(rawCache.has(cacheKey)) continue;
+      try {
+        const buf = await fetchGzipRaw(`images_raw/${key}/${String(idx).padStart(4,'0')}.raw.gz`);
+        if(myGen !== preloadGeneration) return;
+        rawCache.set(cacheKey, new Int16Array(buf));
+      } catch(e) {
+        console.error(`preload ${key}/${idx} failed:`, e); // frame still loads on demand if scrolled to
+      }
+    }
   }
-  loadFrameTimer = setTimeout(()=>{ loadFrameTimer = null; loadFrame(); }, delay);
+  await Promise.all(Array.from({length: concurrency}, worker));
 }
 
 // Wheel: scrub slices for real series, zoom for flat rotation renders
@@ -865,8 +896,7 @@ stage.addEventListener('wheel', e=>{
   if(!current.flat){
     frame += e.deltaY > 0 ? 1 : -1;
     clampFrame();
-    updateReadouts();
-    scheduleLoadFrame();
+    loadFrame();
     return;
   }
   const rect = stage.getBoundingClientRect();
@@ -928,7 +958,7 @@ async function getTriHu(key, sliceIdx1based){
   let hu = triCache.get(cacheKey);
   if(!hu){
     const idx = String(sliceIdx1based).padStart(4,'0');
-    const buf = await fetch(`images_raw/${key}/${idx}.raw`).then(r=>r.arrayBuffer());
+    const buf = await fetchGzipRaw(`images_raw/${key}/${idx}.raw.gz`);
     hu = new Int16Array(buf);
     triCache.set(cacheKey, hu);
   }
