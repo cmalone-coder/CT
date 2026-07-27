@@ -249,17 +249,7 @@
 
     <div class="control-group">
       <label>Image</label>
-      <div class="slider-row">
-        <span class="val-label">Brightness</span>
-        <input type="range" id="brightnessSlider" min="50" max="180" value="100">
-        <span class="val" id="brightnessVal">100%</span>
-      </div>
-      <div class="slider-row" style="margin-top:8px;">
-        <span class="val-label">Contrast</span>
-        <input type="range" id="contrastSlider" min="50" max="200" value="100">
-        <span class="val" id="contrastVal">100%</span>
-      </div>
-      <div class="toggle-row" style="margin-top:10px;">
+      <div class="toggle-row">
         <span class="toggle-label">Invert colors</span>
         <div class="switch" id="invertSwitch"><div class="knob"></div></div>
       </div>
@@ -269,9 +259,7 @@
       <label>Tools</label>
       <div class="layer-btns">
         <div class="layer-btn active" id="mode-rotate">Rotate / pan</div>
-        <div class="layer-btn" id="mode-identify">Identify (click)</div>
         <div class="layer-btn" id="mode-distance">Measure distance</div>
-        <div class="layer-btn" id="mode-angle">Measure angle</div>
       </div>
       <div id="toolResult" class="legend-note" style="margin-top:10px; min-height:14px;">Click a point on the model to use the selected tool.</div>
       <div class="layer-btn" id="clearMeasure" style="margin-top:8px; justify-content:center;">Clear markers</div>
@@ -480,19 +468,15 @@ function wireMeshControls(structKey, mesh){
 // respects each part's current visibility, so a hidden structure is
 // simply unclickable, no extra bookkeeping needed.
 // ---------------------------------------------------------------------
-let toolMode = 'rotate'; // 'rotate' | 'identify' | 'distance' | 'angle'
+let toolMode = 'rotate'; // 'rotate' | 'distance'
 const modeButtons = {
   rotate: document.getElementById('mode-rotate'),
-  identify: document.getElementById('mode-identify'),
   distance: document.getElementById('mode-distance'),
-  angle: document.getElementById('mode-angle'),
 };
 const toolResult = document.getElementById('toolResult');
 const MODE_HINT = {
   rotate: 'Click a point on the model to use the selected tool.',
-  identify: 'Click a structure to identify it.',
   distance: 'Click two points to measure distance.',
-  angle: 'Click three points: two ends, then the vertex.',
 };
 
 function setToolMode(mode){
@@ -537,12 +521,6 @@ function addMarkerLine(a, b){
   markerGroup.add(line);
 }
 
-function angleAtVertex(a, b, c){
-  const v1 = new THREE.Vector3().subVectors(a, b).normalize();
-  const v2 = new THREE.Vector3().subVectors(c, b).normalize();
-  return THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(v1.dot(v2), -1, 1)));
-}
-
 const raycaster = new THREE.Raycaster();
 const pointerNDC = new THREE.Vector2();
 
@@ -554,15 +532,6 @@ function handleToolClick(clientX, clientY){
   const intersects = raycaster.intersectObjects(loadedMeshRoots, true);
   if(!intersects.length) return;
   const hitPoint = intersects[0].point;
-  const structureLabel = intersects[0].object.userData.structureLabel || 'Unknown structure';
-
-  if(toolMode === 'identify'){
-    clearMarkers();
-    addMarkerSphere(hitPoint);
-    toolResult.innerHTML = `<b style="color:var(--amber)">${structureLabel}</b><br>`
-      + `position (mm): ${hitPoint.x.toFixed(1)}, ${hitPoint.y.toFixed(1)}, ${hitPoint.z.toFixed(1)}`;
-    return;
-  }
 
   if(toolMode === 'distance'){
     if(measurePoints.length >= 2) clearMarkers();
@@ -574,22 +543,6 @@ function handleToolClick(clientX, clientY){
       toolResult.innerHTML = `distance: <b style="color:var(--amber)">${d.toFixed(1)} mm</b>`;
     } else {
       toolResult.textContent = 'Click a second point.';
-    }
-    return;
-  }
-
-  if(toolMode === 'angle'){
-    if(measurePoints.length >= 3) clearMarkers();
-    measurePoints.push(hitPoint.clone());
-    addMarkerSphere(hitPoint);
-    if(measurePoints.length >= 2){
-      addMarkerLine(measurePoints[measurePoints.length - 2], measurePoints[measurePoints.length - 1]);
-    }
-    if(measurePoints.length === 3){
-      const deg = angleAtVertex(measurePoints[0], measurePoints[1], measurePoints[2]);
-      toolResult.innerHTML = `angle at point 2: <b style="color:var(--amber)">${deg.toFixed(1)}°</b>`;
-    } else {
-      toolResult.textContent = measurePoints.length === 1 ? 'Click the vertex point (point 2).' : 'Click the third point.';
     }
     return;
   }
@@ -661,24 +614,13 @@ window.addEventListener('resize', ()=>{
   renderer.setSize(wrap.clientWidth, wrap.clientHeight);
 });
 
-// Image adjustment — CSS filters on the canvas itself (brightness/contrast/invert)
-const brightnessSlider = document.getElementById('brightnessSlider');
-const contrastSlider = document.getElementById('contrastSlider');
-const brightnessVal = document.getElementById('brightnessVal');
-const contrastVal = document.getElementById('contrastVal');
+// Image adjustment — CSS filter on the canvas itself (invert)
 const invertSwitch = document.getElementById('invertSwitch');
 let inverted = false;
 
 function applyImageFilter(){
-  const b = brightnessSlider.value;
-  const c = contrastSlider.value;
-  brightnessVal.textContent = b + '%';
-  contrastVal.textContent = c + '%';
-  const invertPart = inverted ? ' invert(1) hue-rotate(180deg)' : '';
-  renderer.domElement.style.filter = `brightness(${b}%) contrast(${c}%)${invertPart}`;
+  renderer.domElement.style.filter = inverted ? 'invert(1) hue-rotate(180deg)' : '';
 }
-brightnessSlider.addEventListener('input', applyImageFilter);
-contrastSlider.addEventListener('input', applyImageFilter);
 invertSwitch.onclick = ()=>{
   inverted = !inverted;
   invertSwitch.classList.toggle('on', inverted);
