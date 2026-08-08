@@ -378,7 +378,7 @@
   </div>
   <!-- Bump this on every push that changes what's visible on this page --
        lets the user tell a real update from a stale cache at a glance. -->
-  <div class="disclaimer">v5</div>
+  <div class="disclaimer">v6</div>
 </header>
 
 <div class="nav-backdrop" id="navBackdrop"></div>
@@ -511,7 +511,7 @@
 // Per-slice HU data is gzipped (tools/export_gallery_slices.py) -- ~2x
 // smaller per slice. Safe to use here (an earlier attempt at this caused
 // a real regression, but the regression was the debounce that shipped
-// alongside it, not the compression itself -- see preloadSeries() below,
+// alongside it, not the compression itself -- see preloadWholeSeries() below,
 // which is what actually fixes smooth scrubbing).
 async function fetchGzipRaw(url){
   const res = await fetch(url);
@@ -610,7 +610,7 @@ function selectSeries(key){
   updateSideLabels();
   resetView();
   loadFrame();
-  if(!current.flat) preloadSeries(key);
+  if(!current.flat) preloadWholeSeries(key);
   if(window.innerWidth <= 820){
     document.getElementById('nav').classList.remove('open');
     document.getElementById('navBackdrop').classList.remove('open');
@@ -904,22 +904,29 @@ stage.addEventListener('touchend', ()=>{ dragging=false; });
 // so it doesn't compete with whatever frame is being actively viewed,
 // so that by the time the user actually scrolls to a given slice it's
 // already sitting in memory and renders with no network wait at all.
-let preloadGeneration = 0;
-async function preloadSeries(key){
+// Per-key cancellation tokens (not one global counter) -- lets the
+// single-view series preload and the tri-plane view's three fixed series
+// preloads all run concurrently without stepping on each other. Switching
+// the single-view series still abandons *that* series' in-flight preload
+// (same as before); it just no longer collides with an unrelated series
+// being preloaded for another purpose (e.g. tri-plane).
+const preloadTokens = new Map(); // key -> token object; latest call for a key wins
+async function preloadWholeSeries(key){
   const s = rawByKey[key];
   if(!s) return;
-  const myGen = ++preloadGeneration;
+  const token = {};
+  preloadTokens.set(key, token);
   const concurrency = 4;
   let nextIdx = 1;
   async function worker(){
     while(nextIdx <= s.count){
-      if(myGen !== preloadGeneration) return; // a different series was selected since -- abandon
+      if(preloadTokens.get(key) !== token) return; // superseded for this key -- abandon
       const idx = nextIdx++;
       const cacheKey = key + '/' + idx;
       if(rawCache.has(cacheKey)) continue;
       try {
         const buf = await fetchGzipRaw(`images_raw/${key}/${String(idx).padStart(4,'0')}.raw.gz`);
-        if(myGen !== preloadGeneration) return;
+        if(preloadTokens.get(key) !== token) return;
         rawCache.set(cacheKey, new Int16Array(buf));
       } catch(e) {
         console.error(`preload ${key}/${idx} failed:`, e); // frame still loads on demand if scrolled to
@@ -974,7 +981,6 @@ const TRI_KEYS = { axial: 'axial_1mm_a', coronal: 'coronal_a', sagittal: 'sagitt
 let triActive = false;
 let sharedPoint = null;
 let triWc = 40, triWw = 400;
-const triCache = new Map();
 
 function seriesPointAtPixel(s, row, col, sliceIdx){
   const [ox,oy,oz] = s.originMm, [rx,ry,rz] = s.rowCosine, [cx,cy,cz] = s.colCosine, [nx,ny,nz] = s.normal;
@@ -993,13 +999,17 @@ function seriesPixelAtPoint(s, p){
 }
 
 async function getTriHu(key, sliceIdx1based){
+  // Shares rawCache with the single-view preloader (preloadWholeSeries) --
+  // so if a tri-plane series has already been fully preloaded (which
+  // setTriActive() triggers on open, and normal single-view browsing does
+  // too), every slice here is already in memory with no fetch at all.
   const cacheKey = key + '/' + sliceIdx1based;
-  let hu = triCache.get(cacheKey);
+  let hu = rawCache.get(cacheKey);
   if(!hu){
     const idx = String(sliceIdx1based).padStart(4,'0');
     const buf = await fetchGzipRaw(`images_raw/${key}/${idx}.raw.gz`);
     hu = new Int16Array(buf);
-    triCache.set(cacheKey, hu);
+    rawCache.set(cacheKey, hu);
   }
   return hu;
 }
@@ -1087,6 +1097,12 @@ function setTriActive(on){
   if(on){
     if(!sharedPoint) initSharedPoint();
     renderAllTriPanes();
+    // Fire off a full background preload of all three fixed tri-plane
+    // series right away, so scrolling through the synced view stops being
+    // choppy after the first pass -- same mechanism (and same rawCache)
+    // as the single-view preloader, just triggered for these 3 series
+    // instead of whichever one the user happens to have selected.
+    Object.values(TRI_KEYS).forEach(preloadWholeSeries);
   }
 }
 document.getElementById('triToggleBtn').onclick = () => setTriActive(!triActive);
@@ -1106,6 +1122,14 @@ document.getElementById('treatmentBackdrop').addEventListener('click', e => {
 buildNav();
 const firstKey = groups["Cross-sections"][0];
 selectSeries(firstKey);
+
+// The synced 3-plane view's three series are fixed (TRI_KEYS) and are the
+// most-used entry point into this data, so warm them in the background
+// from page load rather than waiting for the user to open that view --
+// by the time they click it, scrolling is already smooth. Cheap: these
+// are small gzipped per-slice files, and preloadWholeSeries dedupes
+// against whatever selectSeries() above already started fetching.
+Object.values(TRI_KEYS).forEach(preloadWholeSeries);
 
 const navToggle = document.getElementById('navToggle');
 const navEl = document.getElementById('nav');
