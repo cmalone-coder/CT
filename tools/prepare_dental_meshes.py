@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Prepare the DentalSegmentator-derived STL meshes (maxilla & upper skull,
-mandible, upper teeth, lower teeth, mandibular canal) for the web viewer.
+mandible, upper teeth, lower teeth) for the web viewer.
 
 These meshes come from the user running Slicer's DentalSegmentator
 extension directly (not this project's own segmentation pipeline) --
@@ -64,7 +64,6 @@ STRUCTURES = [
     (f"{STL_PREFIX}Mandible.stl", "mandible", None),
     (f"{STL_PREFIX}Lower Teeth.stl", "lower_teeth", None),
     (f"{STL_PREFIX}Upper Teeth.stl", "upper_teeth", None),
-    (f"{STL_PREFIX}Mandibular canal.stl", "mandibular_canal", None),
     ("Segment_2.obj", "metal_hardware", None),
 ]
 

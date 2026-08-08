@@ -141,6 +141,17 @@
     padding:7px; border-radius:3px; cursor:pointer; transition:all 0.12s;
   }
   .reset-btn:hover{color:var(--amber); border-color:var(--amber-dim);}
+  .primary-btn{
+    background:var(--amber); border-color:var(--amber); color:#1a1206;
+    font-weight:600; font-size:12px; padding:9px;
+    box-shadow:0 0 16px rgba(255,180,84,0.4);
+  }
+  .primary-btn:hover{background:#ffc576; border-color:#ffc576; color:#1a1206;}
+  .primary-btn.active{
+    background:#1a1c1d; border-color:var(--amber); color:var(--amber);
+    box-shadow:none;
+  }
+  .primary-btn.active:hover{background:#1a1c1d; border-color:var(--amber);}
 
   main{
     flex:1;
@@ -363,17 +374,18 @@
     <h1>Maxillofacial Study</h1>
     <a href="index.html" class="nav-link">View 3D reconstruction →</a>
     <button id="reportOpenBtn" class="nav-link" style="cursor:pointer;">Imaging report</button>
+    <button id="treatmentOpenBtn" class="nav-link" style="cursor:pointer;">Treatment plan</button>
   </div>
   <!-- Bump this on every push that changes what's visible on this page --
        lets the user tell a real update from a stale cache at a glance. -->
-  <div class="disclaimer">v4</div>
+  <div class="disclaimer">v5</div>
 </header>
 
 <div class="nav-backdrop" id="navBackdrop"></div>
 <div class="layout">
   <nav id="nav">
     <div class="control-group" style="border-top:none; padding-top:0;">
-      <button class="reset-btn" id="triToggleBtn">Synced 3-plane view</button>
+      <button class="reset-btn primary-btn" id="triToggleBtn">Synced 3-plane view</button>
     </div>
     <div id="seriesList"></div>
     <div class="control-group" id="windowLevelGroup">
@@ -460,6 +472,37 @@
       <li>Chronic opacification of the right maxillary sinus. Otherwise the paranasal sinuses are essentially clear. All sinus drainage pathways are clear.</li>
       <li>Marked leftward nasal septal deviation.</li>
     </ol>
+  </div>
+</div>
+
+<div class="report-backdrop" id="treatmentBackdrop">
+  <div class="report-modal">
+    <button class="report-close" id="treatmentCloseBtn" aria-label="Close">✕</button>
+    <h2>Surgical Treatment Plan</h2>
+    <div class="report-meta">
+      Consultation summary — August 2026<br>
+      Names of individuals removed; this covers only findings and plan discussed at this visit.
+    </div>
+
+    <h3>Background</h3>
+    <p>Patient has existing titanium hardware (plates and mesh) from prior craniofacial reconstruction and follow-up CT imaging was reviewed at this visit to plan the next stage of reconstruction.</p>
+
+    <h3>Findings at This Visit</h3>
+    <p>Existing titanium hardware (L-plates and mesh) is stable on CT, but is in direct communication with the sinus. Although the hardware is bio-compatible, it has become colonized by bacteria and needs to be removed.</p>
+    <p>The hard palate bone on the right side is almost completely missing.</p>
+    <p>An oroantral/oronasal fistula is present and requires repair.</p>
+    <p>An incidental finding on CT — small, scattered material near the ear — was identified as likely fat necrosis, from previous fat grafting; not considered clinically significant and will be left alone unless it interferes with the surgical field.</p>
+
+    <h3>Stage 1 — Bone Reconstruction</h3>
+    <p>Remove the existing titanium mesh and L-plates.</p>
+    <p>Repair the fistula.</p>
+    <p>Reconstruct the missing bony barrier between the oral cavity and sinus using a bone graft. Preferred source: the patient's own bone (autograft) — specifically a split-thickness cranial bone graft, harvested from the outer table of the skull through a small scalp incision. Alternative source if needed: cadaver bone (allograft). The cranial donor site is filled with calcium hydroxyapatite bone cement, used as a contour filler rather than for structural support.</p>
+    <p>New titanium plates placed to secure the bone graft during healing. Estimated healing time before proceeding to Stage 2: approximately six months.</p>
+
+    <h3>Stage 2 — Implant Reconstruction</h3>
+    <p>Repeat CT imaging after healing to assess the result.</p>
+    <p>Virtual surgical planning based on the updated imaging, used to custom-fabricate a patient-specific PEEK implant.</p>
+    <p>Implant placed and secured with titanium screws once the bone graft has established a stable barrier over the sinus.</p>
   </div>
 </div>
 
@@ -1040,6 +1083,7 @@ function setTriActive(on){
   document.querySelector('.scrub').style.display = on ? 'none' : 'flex';
   document.getElementById('windowLevelGroup').style.display = on ? 'none' : (current && !current.flat ? 'block' : 'none');
   document.getElementById('triToggleBtn').textContent = on ? '← Back to single view' : 'Synced 3-plane view';
+  document.getElementById('triToggleBtn').classList.toggle('active', on);
   if(on){
     if(!sharedPoint) initSharedPoint();
     renderAllTriPanes();
@@ -1052,6 +1096,11 @@ document.getElementById('reportOpenBtn').onclick = () => document.getElementById
 document.getElementById('reportCloseBtn').onclick = () => document.getElementById('reportBackdrop').classList.remove('open');
 document.getElementById('reportBackdrop').addEventListener('click', e => {
   if(e.target.id === 'reportBackdrop') document.getElementById('reportBackdrop').classList.remove('open');
+});
+document.getElementById('treatmentOpenBtn').onclick = () => document.getElementById('treatmentBackdrop').classList.add('open');
+document.getElementById('treatmentCloseBtn').onclick = () => document.getElementById('treatmentBackdrop').classList.remove('open');
+document.getElementById('treatmentBackdrop').addEventListener('click', e => {
+  if(e.target.id === 'treatmentBackdrop') document.getElementById('treatmentBackdrop').classList.remove('open');
 });
 
 buildNav();
